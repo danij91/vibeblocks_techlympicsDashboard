@@ -1,0 +1,166 @@
+rules_version = '2';
+
+// ============================================================
+// vb-116 Spark 무결성 — 서버(Functions) 없이 rules가 전선.
+// 초안 = Claude (Phase 0). 최종화·검증 = task vb-116-api-rules.
+// 핵심 invariants는 CONTRACT.md §4 — 거기서 어긋나면 rules가 틀린 것.
+// 기본 = deny. 아래 명시된 allow만 존재.
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- 헬퍼 ----------
+    function authed() { return request.auth != null; }
+    function roleOf(uid) {
+      return get(/databases/$(database)/documents/roles/$(uid)).data.role;
+    }
+    function hasRole() {
+      return authed() && exists(/databases/$(database)/documents/roles/$(request.auth.uid));
+    }
+    function isOrganizer() {
+      return hasRole() && (roleOf(request.auth.uid) == 'organizer' || roleOf(request.auth.uid) == 'admin');
+    }
+    function isAdmin() {
+      return hasRole() && roleOf(request.auth.uid) == 'admin';
+    }
+    function isSchoolTeacher(eventId, schoolId) {
+      return authed()
+        && exists(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/teachers/$(request.auth.uid));
+    }
+    function eventData(eventId) {
+      return get(/databases/$(database)/documents/events/$(eventId)).data;
+    }
+    // 제출 가능 창: 동결 아님 + 마감 전 (endsAt = Timestamp 저장 — CONTRACT §1)
+    function eventOpen(eventId) {
+      let e = eventData(eventId);
+      return !e.frozen && request.time < e.endsAt;
+    }
+
+    // ---------- capability 매핑 (경로 = 비밀. get만, list 금지) ----------
+    match /joinCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if isOrganizer();
+    }
+    match /teacherCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if isOrganizer();
+    }
+    match /recoveryCodes/{hash} {
+      allow get: if true;
+      allow list: if false;
+      // joinClass 시 학생이 자기 participant와 함께 생성
+      // TODO(vb-116-api-rules): 매핑이 본인 participant를 가리키는지 get()으로 검증
+      allow create: if authed();
+      allow update, delete: if false;
+      // 기기 재바인딩 증명: 코드(=경로)를 아는 클라이언트만 claim 생성 가능
+      match /claims/{uid} {
+        allow get: if authed() && uid == request.auth.uid;
+        allow list: if false;
+        allow create: if authed() && uid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- 역할 ----------
+    match /organizerInvites/{code} {
+      allow get: if authed();
+      allow list: if isAdmin();
+      allow create, delete: if isAdmin();
+      // redeem 마킹 (usedBy 1회 기록)
+      // TODO(vb-116-api-rules): usedBy null→uid 전이만 허용으로 조이기
+      allow update: if authed() && resource.data.usedBy == null
+        && request.resource.data.usedBy == request.auth.uid;
+    }
+    match /roles/{uid} {
+      allow get: if authed() && (uid == request.auth.uid || isAdmin());
+      allow list: if isAdmin();
+      // admin 발급 또는 초대코드 redeem (본인, organizer 한정, 미사용 코드)
+      allow create: if isAdmin()
+        || (authed() && uid == request.auth.uid
+            && request.resource.data.role == 'organizer'
+            && exists(/databases/$(database)/documents/organizerInvites/$(request.resource.data.inviteCode)));
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ---------- 본체 ----------
+    match /events/{eventId} {
+      allow get: if true; // 이벤트 메타는 코드 경유 도달 — 민감정보 없음
+      allow list: if isOrganizer();
+      allow create, update: if isOrganizer();
+      allow delete: if false;
+
+      match /schools/{schoolId} {
+        allow get: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
+        allow list: if isOrganizer();
+        allow create, update: if isOrganizer();
+        allow delete: if false;
+
+        // 교사↔학교 바인딩. create 조건 = 교사코드 일치 (가입 게이트의 실체)
+        match /teachers/{uid} {
+          allow get: if authed() && (uid == request.auth.uid || isOrganizer());
+          allow list: if isOrganizer();
+          allow create: if authed() && uid == request.auth.uid
+            && request.resource.data.code
+               == get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)).data.teacherCode;
+          allow update: if false;
+          allow delete: if isOrganizer();
+        }
+
+        match /classes/{classId} {
+          allow get: if true; // 경로 자체가 capability (joinCodes 경유로만 도달 가능)
+          allow list: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
+          allow create, update: if isOrganizer();
+          allow delete: if false;
+
+          // 리더보드 비정규화 — code-only 공개의 실체 (읽기 1회/행)
+          match /board/{participantId} {
+            allow get, list: if true;
+            // 본인 entry만 + metrics가 실제 attempt 원본과 일치할 때만 (위변조 차단)
+            allow create, update: if authed()
+              && get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
+              && request.resource.data.metrics
+                 == get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)/attempts/$(participantId + '_' + string(request.resource.data.bestAttemptNo))).data.metrics;
+            allow delete: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
+          }
+
+          match /participants/{participantId} {
+            allow get: if authed()
+              && (resource.data.ownerUid == request.auth.uid
+                  || isSchoolTeacher(eventId, schoolId) || isOrganizer());
+            allow list: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
+            // 학생 등록: 본인 uid, pending 시작, 행사 열림
+            allow create: if authed()
+              && request.resource.data.ownerUid == request.auth.uid
+              && request.resource.data.status == 'pending'
+              && eventOpen(eventId);
+            // 교사/주최측: 상태 전환 등 | 학생 본인: ownerUid 재바인딩만 (recovery claim 증명)
+            allow update: if (isSchoolTeacher(eventId, schoolId) || isOrganizer())
+              || (authed()
+                  && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerUid'])
+                  && request.resource.data.ownerUid == request.auth.uid
+                  && exists(/databases/$(database)/documents/recoveryCodes/$(resource.data.recoveryHash)/claims/$(request.auth.uid)));
+            allow delete: if false;
+
+            // 공식 시도 — 문서 ID 고정 + create-only = 시도 상한의 물리적 강제
+            match /attempts/{attemptId} {
+              allow get, list: if authed()
+                && (get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
+                    || isSchoolTeacher(eventId, schoolId) || isOrganizer());
+              allow create: if authed()
+                && get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
+                && get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.status != 'rejected'
+                && attemptId == participantId + '_' + string(request.resource.data.attemptNo)
+                && request.resource.data.attemptNo >= 1
+                && request.resource.data.attemptNo <= eventData(eventId).maxAttempts
+                && eventOpen(eventId);
+              allow update, delete: if false;
+            }
+          }
+        }
+      }
+    }
+  }
+}
