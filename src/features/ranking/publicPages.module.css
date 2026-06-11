@@ -1,0 +1,408 @@
+.shell {
+  min-height: 100vh;
+  padding: 20px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(239, 245, 255, 0.92)),
+    linear-gradient(90deg, #1b6f5f, #2563eb);
+}
+
+.homeHero,
+.messagePanel,
+.joinPanel,
+.rankingHeader,
+.toolbar,
+.boardPanel {
+  width: min(960px, 100%);
+  margin: 0 auto;
+}
+
+.homeHero {
+  display: grid;
+  gap: 30px;
+  min-height: calc(100vh - 40px);
+  align-content: center;
+}
+
+.brandBar,
+.joinActions,
+.toolbar,
+.segmented,
+.codeEntry {
+  display: flex;
+  align-items: center;
+}
+
+.brandBar {
+  gap: 10px;
+  font-weight: 700;
+  color: #10202f;
+}
+
+.brandMark {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #1b6f5f;
+  font-size: 0.86rem;
+}
+
+.homeCopy {
+  max-width: 640px;
+}
+
+.kicker {
+  margin: 0 0 8px;
+  color: #1b6f5f;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.homeCopy h1,
+.messagePanel h1,
+.joinPanel h1,
+.rankingHeader h1 {
+  margin: 0;
+  color: #10202f;
+  line-height: 1.02;
+}
+
+.homeCopy h1 {
+  max-width: 740px;
+  font-size: clamp(2.4rem, 8vw, 5.8rem);
+}
+
+.homeCopy p,
+.messagePanel p,
+.joinPanel p,
+.rankingHeader p,
+.toolbar p {
+  margin: 10px 0 0;
+  color: #425466;
+  line-height: 1.55;
+}
+
+.codeForm {
+  display: grid;
+  gap: 10px;
+  max-width: 560px;
+}
+
+.codeForm label {
+  color: #10202f;
+  font-weight: 700;
+}
+
+.codeEntry {
+  gap: 8px;
+}
+
+.codeEntry input {
+  min-width: 0;
+  flex: 1;
+  height: 54px;
+  border: 1px solid #bdd4e5;
+  border-radius: 8px;
+  padding: 0 16px;
+  background: #ffffff;
+  color: #10202f;
+  font: inherit;
+  font-size: 1.2rem;
+  text-transform: uppercase;
+}
+
+.codeEntry button,
+.refreshButton,
+.primaryLink,
+.secondaryLink,
+.segmented button {
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.codeEntry button,
+.refreshButton,
+.primaryLink {
+  color: #ffffff;
+  background: #1b6f5f;
+}
+
+.codeEntry button {
+  height: 54px;
+  padding: 0 18px;
+}
+
+.formError {
+  margin: 0;
+  color: #a82424;
+  font-weight: 700;
+}
+
+.messagePanel,
+.joinPanel {
+  display: grid;
+  gap: 22px;
+  padding-top: 18vh;
+}
+
+.joinPanel {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-top: 36px;
+  padding-bottom: 24px;
+}
+
+.joinActions {
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.primaryLink,
+.secondaryLink {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+}
+
+.secondaryLink {
+  color: #10202f;
+  background: #e5eef7;
+}
+
+.rankingHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  padding-top: 24px;
+}
+
+.backLink {
+  grid-column: 1 / -1;
+  width: max-content;
+  color: #1b6f5f;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.rankingHeader h1 {
+  font-size: clamp(2rem, 7vw, 4.2rem);
+}
+
+.refreshButton {
+  align-self: end;
+  min-height: 42px;
+  padding: 0 16px;
+}
+
+.refreshButton:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.toolbar {
+  gap: 14px;
+  justify-content: space-between;
+  margin-top: 28px;
+  margin-bottom: 12px;
+}
+
+.segmented {
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #cbd8e6;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.segmented button {
+  min-height: 34px;
+  padding: 0 12px;
+  color: #425466;
+  background: transparent;
+}
+
+.segmented .activeSegment {
+  color: #ffffff;
+  background: #2563eb;
+}
+
+.boardPanel {
+  overflow: hidden;
+  border: 1px solid #d8e2ed;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 40px rgba(16, 32, 47, 0.08);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.boardTable {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+}
+
+.boardTable th,
+.boardTable td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef2f7;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.boardTable th {
+  color: #5c6f82;
+  background: #f5f8fb;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.boardTable td:first-child,
+.boardTable th:first-child,
+.boardTable td:nth-child(4),
+.boardTable th:nth-child(4),
+.boardTable td:nth-child(5),
+.boardTable th:nth-child(5) {
+  text-align: right;
+}
+
+.nameCell {
+  display: block;
+  color: #10202f;
+  font-weight: 800;
+}
+
+.statusChip {
+  display: inline-flex;
+  margin-top: 5px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: #425466;
+  background: #e9f0f6;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.unsubmittedRow {
+  color: #738398;
+  background: #fbfcfe;
+}
+
+.emptyState {
+  padding: 42px 20px;
+  color: #425466;
+  text-align: center;
+}
+
+.emptyState h2 {
+  margin: 0 0 8px;
+  color: #10202f;
+}
+
+.emptyState p {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .shell {
+    padding: 14px;
+  }
+
+  .homeHero {
+    min-height: calc(100vh - 28px);
+  }
+
+  .codeEntry,
+  .joinPanel,
+  .rankingHeader,
+  .toolbar {
+    display: grid;
+  }
+
+  .codeEntry,
+  .toolbar {
+    gap: 10px;
+  }
+
+  .joinPanel,
+  .rankingHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .joinActions {
+    justify-content: stretch;
+  }
+
+  .joinActions a {
+    flex: 1;
+  }
+
+  .refreshButton {
+    width: 100%;
+  }
+
+  .segmented {
+    width: 100%;
+  }
+
+  .segmented button {
+    flex: 1;
+  }
+
+  .boardPanel {
+    margin-inline: -6px;
+  }
+
+  .boardTable {
+    min-width: 0;
+    table-layout: fixed;
+    font-size: 0.86rem;
+  }
+
+  .boardTable th,
+  .boardTable td {
+    padding: 10px 6px;
+  }
+
+  .boardTable th:first-child,
+  .boardTable td:first-child {
+    width: 42px;
+  }
+
+  .boardTable th:nth-child(3),
+  .boardTable td:nth-child(3) {
+    width: 68px;
+  }
+
+  .boardTable th:nth-child(4),
+  .boardTable td:nth-child(4) {
+    width: 62px;
+  }
+
+  .boardTable th:nth-child(5),
+  .boardTable td:nth-child(5) {
+    width: 58px;
+  }
+
+  .nameCell {
+    overflow-wrap: anywhere;
+  }
+
+  .statusChip {
+    font-size: 0.68rem;
+  }
+}
