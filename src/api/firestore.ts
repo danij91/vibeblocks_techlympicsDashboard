@@ -1,0 +1,905 @@
+import { FirebaseError } from 'firebase/app'
+import { signInAnonymously } from 'firebase/auth'
+import {
+  Timestamp,
+  arrayUnion,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  writeBatch,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from 'firebase/firestore'
+import type { CompetitionApi } from './index'
+import { newInviteCode, newJoinCode, newPublicId, newRecoveryCode, newTeacherCode, normalizeCode, sha256Hex } from './codes'
+import { averageSec, compareEntries, isBetter, recordTimeSec } from './scoring'
+import type {
+  AttemptDoc,
+  BoardBest,
+  BoardEntryDoc,
+  ChallengeDef,
+  ChallengeSlot,
+  ClassDoc,
+  ClassPath,
+  EventDoc,
+  EventStats,
+  JoinInfo,
+  LeaderboardRow,
+  OrganizerSchoolView,
+  ParticipantDoc,
+  ParticipantPath,
+  ParticipantStatus,
+  RoleDoc,
+  SchoolDoc,
+  SchoolPath,
+  TeacherSchoolView,
+} from './types'
+import { auth, db } from '../lib/firebase'
+
+type CodeMapping = {
+  eventId: string
+  schoolId: string
+  classId?: string
+  schoolName?: string
+  className?: string
+  state?: string
+  zone?: string
+  createdAt?: unknown
+}
+
+type RoleWithSchools = RoleDoc & {
+  code?: string
+  eventId?: string
+  schoolId?: string
+  schoolPaths?: SchoolPath[]
+}
+
+const defaultChallenges = (): ChallengeDef[] => [
+  { slot: 'c1', missionId: 201, name: 'Challenge 1' },
+  { slot: 'c2', missionId: 202, name: 'Challenge 2' },
+  { slot: 'c3', missionId: 203, name: 'Challenge 3' },
+]
+
+const nowIso = () => new Date().toISOString()
+
+function toTimestamp(iso: string): Timestamp {
+  return Timestamp.fromDate(new Date(iso))
+}
+
+function toIso(value: unknown): string {
+  if (value instanceof Timestamp) return value.toDate().toISOString()
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+    return value.toDate().toISOString()
+  }
+  return nowIso()
+}
+
+function clean<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T
+}
+
+function asEvent(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData }): EventDoc {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    name: data.name,
+    startsAt: toIso(data.startsAt),
+    endsAt: toIso(data.endsAt),
+    challenges: (data.challenges ?? defaultChallenges()) as ChallengeDef[],
+    attemptsPerChallenge: data.attemptsPerChallenge ?? 3,
+    visibility: data.visibility ?? 'code-only',
+    scoringVersion: data.scoringVersion ?? 'v2',
+    frozen: data.frozen ?? false,
+    createdAt: toIso(data.createdAt),
+  }
+}
+
+function asSchool(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData }, eventId: string): SchoolDoc {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    eventId: data.eventId ?? eventId,
+    name: data.name,
+    state: data.state,
+    zone: data.zone,
+    teacherCode: data.teacherCode ?? '',
+    createdAt: toIso(data.createdAt),
+  }
+}
+
+function asClass(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData }, eventId: string, schoolId: string): ClassDoc {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    eventId: data.eventId ?? eventId,
+    schoolId: data.schoolId ?? schoolId,
+    name: data.name,
+    joinCode: data.joinCode,
+    createdAt: toIso(data.createdAt),
+  }
+}
+
+function asParticipant(
+  snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData },
+  path: ClassPath,
+): ParticipantDoc {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    eventId: data.eventId ?? path.eventId,
+    schoolId: data.schoolId ?? path.schoolId,
+    classId: data.classId ?? path.classId,
+    name: data.name,
+    grade: data.grade,
+    publicId: data.publicId,
+    status: data.status,
+    ownerUid: data.ownerUid,
+    recoveryHash: data.recoveryHash,
+    registeredAt: toIso(data.registeredAt),
+    statusHistory: (data.statusHistory ?? []).map((x: DocumentData) => ({ ...x, at: toIso(x.at) })),
+  }
+}
+
+function asAttempt(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData }): AttemptDoc {
+  const data = snap.data()
+  return {
+    id: snap.id,
+    slot: data.slot,
+    attemptNo: data.attemptNo,
+    metrics: data.metrics,
+    submittedAt: toIso(data.submittedAt),
+  }
+}
+
+function asBoardEntry(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData }): BoardEntryDoc {
+  const data = snap.data()
+  return {
+    participantId: data.participantId ?? snap.id,
+    publicId: data.publicId,
+    name: data.name,
+    status: data.status,
+    bests: (data.bests ?? {}) as Partial<Record<ChallengeSlot, BoardBest>>,
+    updatedAt: toIso(data.updatedAt),
+  }
+}
+
+function asRole(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(): DocumentData }): RoleDoc {
+  const data = snap.data()
+  return {
+    uid: snap.id,
+    role: data.role,
+    email: data.email,
+    inviteCode: data.inviteCode,
+    createdAt: toIso(data.createdAt),
+  }
+}
+
+function mapError(error: unknown): never {
+  if (error instanceof Error && /^[A-Z_]+$/.test(error.message)) throw error
+  if (error instanceof FirebaseError) {
+    if (error.code === 'permission-denied') throw new Error('FORBIDDEN')
+    if (error.code === 'not-found') throw new Error('NOT_FOUND')
+    if (error.code === 'already-exists') throw new Error('ALREADY_EXISTS')
+  }
+  throw error
+}
+
+async function ensureUser(): Promise<string> {
+  if (auth.currentUser) return auth.currentUser.uid
+  const credential = await signInAnonymously(auth)
+  return credential.user.uid
+}
+
+function eventRef(eventId: string) {
+  return doc(db, 'events', eventId)
+}
+
+function schoolRef(path: SchoolPath) {
+  return doc(db, 'events', path.eventId, 'schools', path.schoolId)
+}
+
+function classRef(path: ClassPath) {
+  return doc(db, 'events', path.eventId, 'schools', path.schoolId, 'classes', path.classId)
+}
+
+function participantRef(path: ParticipantPath) {
+  return doc(db, 'events', path.eventId, 'schools', path.schoolId, 'classes', path.classId, 'participants', path.participantId)
+}
+
+function boardRef(path: ParticipantPath) {
+  return doc(db, 'events', path.eventId, 'schools', path.schoolId, 'classes', path.classId, 'board', path.participantId)
+}
+
+function attemptsCollection(path: ParticipantPath) {
+  return collection(
+    db,
+    'events',
+    path.eventId,
+    'schools',
+    path.schoolId,
+    'classes',
+    path.classId,
+    'participants',
+    path.participantId,
+    'attempts',
+  )
+}
+
+async function getUniqueCode(makeCode: () => string, collectionName: 'joinCodes' | 'teacherCodes' | 'adminInvites'): Promise<string> {
+  for (let i = 0; i < 30; i += 1) {
+    const code = makeCode()
+    if (!(await getDoc(doc(db, collectionName, code))).exists()) return code
+  }
+  throw new Error('CODE_GENERATION_FAILED')
+}
+
+function eventIsClosed(event: EventDoc): boolean {
+  return event.frozen || Date.now() >= new Date(event.endsAt).getTime()
+}
+
+function emptyUsed(): Record<ChallengeSlot, number> {
+  return { c1: 0, c2: 0, c3: 0 }
+}
+
+function attemptsUsed(attempts: AttemptDoc[]): Record<ChallengeSlot, number> {
+  const used = emptyUsed()
+  for (const attempt of attempts) used[attempt.slot] += 1
+  return used
+}
+
+function attemptsUsedFromBests(bests: Partial<Record<ChallengeSlot, BoardBest>>): Record<ChallengeSlot, number> {
+  return {
+    c1: bests.c1?.attemptNo ?? 0,
+    c2: bests.c2?.attemptNo ?? 0,
+    c3: bests.c3?.attemptNo ?? 0,
+  }
+}
+
+function publicBests(bests: Partial<Record<ChallengeSlot, BoardBest>>): Partial<Record<ChallengeSlot, number>> {
+  return Object.fromEntries(Object.entries(bests).map(([slot, best]) => [slot, best!.timeSec])) as Partial<Record<ChallengeSlot, number>>
+}
+
+export function createFirestoreApi(): CompetitionApi {
+  async function readJoinInfo(joinCode: string): Promise<JoinInfo> {
+    const code = normalizeCode(joinCode)
+    const mappingSnap = await getDoc(doc(db, 'joinCodes', code))
+    if (!mappingSnap.exists()) throw new Error('CLASS_NOT_FOUND')
+    const mapping = mappingSnap.data() as CodeMapping
+    if (!mapping.classId) throw new Error('CLASS_NOT_FOUND')
+
+    const eventSnap = await getDoc(eventRef(mapping.eventId))
+    const classSnap = await getDoc(classRef({ eventId: mapping.eventId, schoolId: mapping.schoolId, classId: mapping.classId }))
+    if (!eventSnap.exists() || !classSnap.exists()) throw new Error('CLASS_NOT_FOUND')
+
+    const event = asEvent(eventSnap)
+    const classInfo = asClass(classSnap, mapping.eventId, mapping.schoolId)
+    const school: SchoolDoc = {
+      id: mapping.schoolId,
+      eventId: mapping.eventId,
+      name: mapping.schoolName ?? mapping.schoolId,
+      state: mapping.state,
+      zone: mapping.zone,
+      teacherCode: '',
+      createdAt: toIso(mapping.createdAt),
+    }
+    return {
+      event,
+      school,
+      classInfo,
+      path: { eventId: mapping.eventId, schoolId: mapping.schoolId, classId: mapping.classId },
+    }
+  }
+
+  async function readFullSchool(path: SchoolPath): Promise<SchoolDoc> {
+    const snap = await getDoc(schoolRef(path))
+    if (!snap.exists()) throw new Error('SCHOOL_NOT_FOUND')
+    return asSchool(snap, path.eventId)
+  }
+
+  async function readParticipant(path: ParticipantPath): Promise<ParticipantDoc> {
+    const snap = await getDoc(participantRef(path))
+    if (!snap.exists()) throw new Error('PARTICIPANT_NOT_FOUND')
+    return asParticipant(snap, path)
+  }
+
+  async function readAttempts(path: ParticipantPath): Promise<AttemptDoc[]> {
+    const snaps = await getDocs(attemptsCollection(path))
+    return snaps.docs.map(asAttempt).sort((a, b) => (a.slot === b.slot ? a.attemptNo - b.attemptNo : a.slot.localeCompare(b.slot)))
+  }
+
+  async function readParticipants(path: ClassPath): Promise<ParticipantDoc[]> {
+    const snaps = await getDocs(collection(db, 'events', path.eventId, 'schools', path.schoolId, 'classes', path.classId, 'participants'))
+    return snaps.docs.map((snap) => asParticipant(snap, path))
+  }
+
+  async function statusPatch(path: ParticipantPath, status: ParticipantStatus): Promise<void> {
+    const uid = await ensureUser()
+    const participant = await readParticipant(path)
+    const nextHistory = [...participant.statusHistory, { status, at: nowIso(), by: uid }]
+    await updateDoc(participantRef(path), {
+      status,
+      statusHistory: nextHistory.map((x) => ({ ...x, at: toTimestamp(x.at) })),
+    })
+    const boardSnap = await getDoc(boardRef(path))
+    if (boardSnap.exists()) await updateDoc(boardRef(path), { status })
+  }
+
+  return {
+    async getClassByJoinCode(joinCode) {
+      try {
+        return await readJoinInfo(joinCode)
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async joinClass(joinCode, profile) {
+      try {
+        const uid = await ensureUser()
+        const info = await readJoinInfo(joinCode)
+        if (eventIsClosed(info.event)) throw new Error('EVENT_FROZEN')
+
+        const recoveryCode = newRecoveryCode()
+        const recoveryHash = await sha256Hex(recoveryCode)
+        const participantDoc = doc(collection(db, 'events', info.path.eventId, 'schools', info.path.schoolId, 'classes', info.path.classId, 'participants'))
+        const participant: ParticipantDoc = {
+          id: participantDoc.id,
+          eventId: info.path.eventId,
+          schoolId: info.path.schoolId,
+          classId: info.path.classId,
+          name: profile.name.trim(),
+          grade: profile.grade?.trim() || undefined,
+          publicId: newPublicId(),
+          status: 'pending',
+          ownerUid: uid,
+          recoveryHash,
+          registeredAt: nowIso(),
+          statusHistory: [],
+        }
+
+        const batch = writeBatch(db)
+        batch.set(participantDoc, {
+          ...clean(participant),
+          registeredAt: serverTimestamp(),
+          statusHistory: [],
+        })
+        batch.set(doc(db, 'recoveryCodes', recoveryHash), {
+          eventId: info.path.eventId,
+          schoolId: info.path.schoolId,
+          classId: info.path.classId,
+          participantId: participant.id,
+          createdAt: serverTimestamp(),
+        })
+        await batch.commit()
+        return { ...info, participant, recoveryCode }
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async resumeParticipant(recoveryCode) {
+      try {
+        const uid = await ensureUser()
+        const recoveryHash = await sha256Hex(normalizeCode(recoveryCode))
+        const recoverySnap = await getDoc(doc(db, 'recoveryCodes', recoveryHash))
+        if (!recoverySnap.exists()) throw new Error('RECOVERY_NOT_FOUND')
+        const mapping = recoverySnap.data() as Required<Pick<CodeMapping, 'eventId' | 'schoolId' | 'classId'>> & { participantId: string }
+        const path: ParticipantPath = {
+          eventId: mapping.eventId,
+          schoolId: mapping.schoolId,
+          classId: mapping.classId,
+          participantId: mapping.participantId,
+        }
+        await setDoc(doc(db, 'recoveryCodes', recoveryHash, 'claims', uid), { claimedAt: serverTimestamp() })
+        await updateDoc(participantRef(path), { ownerUid: uid })
+        const classSnap = await getDoc(classRef(path))
+        if (!classSnap.exists()) throw new Error('CLASS_NOT_FOUND')
+        const info = await readJoinInfo(asClass(classSnap, path.eventId, path.schoolId).joinCode)
+        return { ...info, participant: await readParticipant(path) }
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async submitAttempt(path, slot, metrics) {
+      try {
+        const uid = await ensureUser()
+        const [eventSnap, participant] = await Promise.all([getDoc(eventRef(path.eventId)), readParticipant(path)])
+        if (!eventSnap.exists()) throw new Error('EVENT_NOT_FOUND')
+        const event = asEvent(eventSnap)
+        if (participant.ownerUid !== uid) throw new Error('FORBIDDEN')
+        if (participant.status === 'rejected') throw new Error('REJECTED')
+        if (eventIsClosed(event)) throw new Error('EVENT_FROZEN')
+
+        const attempts = await readAttempts(path)
+        const slotUsed = attempts.filter((attempt) => attempt.slot === slot).length
+        if (slotUsed >= event.attemptsPerChallenge) throw new Error('NO_ATTEMPTS_LEFT')
+        const attemptNo = slotUsed + 1
+        const attemptId = `${path.participantId}_${slot}_${attemptNo}`
+        await setDoc(doc(attemptsCollection(path), attemptId), {
+          slot,
+          attemptNo,
+          metrics,
+          submittedAt: serverTimestamp(),
+        })
+
+        const boardSnap = await getDoc(boardRef(path))
+        const current = boardSnap.exists() ? asBoardEntry(boardSnap) : null
+        let isNewBest = false
+        let bestTimeSec = current?.bests[slot]?.timeSec ?? null
+        if (isBetter(metrics, current?.bests[slot])) {
+          const timeSec = recordTimeSec(metrics)
+          if (timeSec !== null) {
+            const nextBests: Partial<Record<ChallengeSlot, BoardBest>> = {
+              ...(current?.bests ?? {}),
+              [slot]: { attemptNo, timeSec, metrics },
+            }
+            const entry: BoardEntryDoc = {
+              participantId: participant.id,
+              publicId: participant.publicId,
+              name: participant.name,
+              status: participant.status,
+              bests: nextBests,
+              updatedAt: nowIso(),
+            }
+            await setDoc(boardRef(path), { ...entry, updatedAt: serverTimestamp() })
+            isNewBest = true
+            bestTimeSec = timeSec
+          }
+        }
+
+        return {
+          slot,
+          attemptNo,
+          remaining: event.attemptsPerChallenge - attemptNo,
+          isNewBest,
+          bestTimeSec,
+        }
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async getLeaderboard(joinCode, opts) {
+      try {
+        const info = await readJoinInfo(joinCode)
+        const snaps = await getDocs(collection(db, 'events', info.path.eventId, 'schools', info.path.schoolId, 'classes', info.path.classId, 'board'))
+        const entries = snaps.docs
+          .map(asBoardEntry)
+          .filter((entry) => (opts?.includePending ? entry.status !== 'rejected' : entry.status === 'approved'))
+          .sort(compareEntries)
+        const ranked = entries.filter((entry) => averageSec(entry.bests) !== null)
+        return entries.map<LeaderboardRow>((entry) => {
+          const avg = averageSec(entry.bests)
+          return {
+            rank: avg === null ? null : ranked.indexOf(entry) + 1,
+            publicId: entry.publicId,
+            name: entry.name,
+            status: entry.status,
+            bests: publicBests(entry.bests),
+            averageSec: avg,
+            attemptsUsed: attemptsUsedFromBests(entry.bests),
+          }
+        })
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async getMyProgress(path) {
+      try {
+        await ensureUser()
+        const [attempts, boardSnap] = await Promise.all([readAttempts(path), getDoc(boardRef(path))])
+        const board = boardSnap.exists() ? asBoardEntry(boardSnap) : null
+        return {
+          attemptsUsed: attemptsUsed(attempts),
+          bests: publicBests(board?.bests ?? {}),
+        }
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async validateTeacherCode(code) {
+      try {
+        const normalized = normalizeCode(code)
+        const mappingSnap = await getDoc(doc(db, 'teacherCodes', normalized))
+        if (!mappingSnap.exists()) throw new Error('TEACHER_CODE_NOT_FOUND')
+        const mapping = mappingSnap.data() as CodeMapping
+        const eventSnap = await getDoc(eventRef(mapping.eventId))
+        if (!eventSnap.exists()) throw new Error('EVENT_NOT_FOUND')
+        return {
+          event: asEvent(eventSnap),
+          school: { id: mapping.schoolId, name: mapping.schoolName ?? mapping.schoolId },
+        }
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async bindTeacherSchool(code) {
+      try {
+        const uid = await ensureUser()
+        const normalized = normalizeCode(code)
+        const mappingSnap = await getDoc(doc(db, 'teacherCodes', normalized))
+        if (!mappingSnap.exists()) throw new Error('TEACHER_CODE_NOT_FOUND')
+        const mapping = mappingSnap.data() as CodeMapping
+        const path = { eventId: mapping.eventId, schoolId: mapping.schoolId }
+        const roleRef = doc(db, 'roles', uid)
+        const roleSnap = await getDoc(roleRef)
+        const batch = writeBatch(db)
+        batch.set(doc(db, 'events', path.eventId, 'schools', path.schoolId, 'teachers', uid), {
+          code: normalized,
+          boundAt: serverTimestamp(),
+        })
+        if (roleSnap.exists()) {
+          batch.update(roleRef, {
+            role: 'teacher',
+            schoolPaths: arrayUnion(path),
+          })
+        } else {
+          batch.set(roleRef, {
+            role: 'teacher',
+            createdAt: serverTimestamp(),
+            code: normalized,
+            eventId: path.eventId,
+            schoolId: path.schoolId,
+            schoolPaths: [path],
+          })
+        }
+        await batch.commit()
+        return path
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async listMySchools() {
+      try {
+        const uid = await ensureUser()
+        const roleSnap = await getDoc(doc(db, 'roles', uid))
+        if (!roleSnap.exists()) throw new Error('FORBIDDEN')
+        const role = roleSnap.data() as RoleWithSchools
+        const paths = role.schoolPaths ?? (role.eventId && role.schoolId ? [{ eventId: role.eventId, schoolId: role.schoolId }] : [])
+        const views: TeacherSchoolView[] = await Promise.all(
+          paths.map(async (path) => {
+            const [eventSnap, school] = await Promise.all([getDoc(eventRef(path.eventId)), readFullSchool(path)])
+            if (!eventSnap.exists()) throw new Error('EVENT_NOT_FOUND')
+            const classSnaps = await getDocs(collection(db, 'events', path.eventId, 'schools', path.schoolId, 'classes'))
+            return {
+              event: asEvent(eventSnap),
+              school,
+              classes: classSnaps.docs.map((snap) => asClass(snap, path.eventId, path.schoolId)),
+            }
+          }),
+        )
+        return views
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async listParticipants(path) {
+      try {
+        await ensureUser()
+        return await readParticipants(path)
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async setParticipantStatus(path, status) {
+      try {
+        await statusPatch(path, status)
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async bulkApprove(path) {
+      try {
+        await ensureUser()
+        const participants = await readParticipants(path)
+        const pending = participants.filter((participant) => participant.status === 'pending')
+        await Promise.all(pending.map((participant) => statusPatch({ ...path, participantId: participant.id }, 'approved')))
+        return pending.length
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async listEvents() {
+      try {
+        await ensureUser()
+        const snaps = await getDocs(collection(db, 'events'))
+        return snaps.docs.map(asEvent)
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async createEvent(input) {
+      try {
+        await ensureUser()
+        const ref = doc(collection(db, 'events'))
+        const event: EventDoc = {
+          id: ref.id,
+          name: input.name.trim(),
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
+          challenges: input.challenges ?? defaultChallenges(),
+          attemptsPerChallenge: input.attemptsPerChallenge ?? 3,
+          visibility: 'code-only',
+          scoringVersion: 'v2',
+          frozen: false,
+          createdAt: nowIso(),
+        }
+        await setDoc(ref, {
+          ...event,
+          startsAt: toTimestamp(event.startsAt),
+          endsAt: toTimestamp(event.endsAt),
+          createdAt: serverTimestamp(),
+        })
+        return event
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async updateEvent(eventId, patch) {
+      try {
+        await ensureUser()
+        const payload: Record<string, unknown> = { ...patch }
+        if (patch.startsAt) payload.startsAt = toTimestamp(patch.startsAt)
+        if (patch.endsAt) payload.endsAt = toTimestamp(patch.endsAt)
+        await updateDoc(eventRef(eventId), payload)
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async importSchools(eventId, rows) {
+      try {
+        await ensureUser()
+        const existingSchoolSnaps = await getDocs(collection(db, 'events', eventId, 'schools'))
+        const schoolsByName = new Map(existingSchoolSnaps.docs.map((snap) => [String(snap.data().name).trim(), asSchool(snap, eventId)]))
+        const touchedSchools = new Map<string, SchoolDoc>()
+        const classes: ClassDoc[] = []
+        const skipped: { row: (typeof rows)[number]; reason: string }[] = []
+        const batch = writeBatch(db)
+
+        for (const row of rows) {
+          const schoolName = row.schoolName?.trim()
+          const className = row.className?.trim()
+          if (!schoolName || !className) {
+            skipped.push({ row, reason: 'EMPTY_FIELD' })
+            continue
+          }
+
+          let school = schoolsByName.get(schoolName)
+          if (!school) {
+            const ref = doc(collection(db, 'events', eventId, 'schools'))
+            const teacherCode = await getUniqueCode(newTeacherCode, 'teacherCodes')
+            school = {
+              id: ref.id,
+              eventId,
+              name: schoolName,
+              state: row.state?.trim() || undefined,
+              zone: row.zone?.trim() || undefined,
+              teacherCode,
+              createdAt: nowIso(),
+            }
+            schoolsByName.set(schoolName, school)
+            batch.set(ref, clean({ ...school, createdAt: serverTimestamp() }))
+            batch.set(doc(db, 'teacherCodes', teacherCode), clean({
+              eventId,
+              schoolId: school.id,
+              schoolName: school.name,
+              state: school.state,
+              zone: school.zone,
+              createdAt: serverTimestamp(),
+            }))
+          }
+
+          const classSnaps = await getDocs(collection(db, 'events', eventId, 'schools', school.id, 'classes'))
+          const duplicateClass =
+            classSnaps.docs.some((snap) => String(snap.data().name).trim() === className) ||
+            classes.some((classInfo) => classInfo.schoolId === school!.id && classInfo.name === className)
+          if (duplicateClass) {
+            skipped.push({ row, reason: 'DUPLICATE_CLASS' })
+            touchedSchools.set(school.id, school)
+            continue
+          }
+
+          const classDoc = doc(collection(db, 'events', eventId, 'schools', school.id, 'classes'))
+          const joinCode = await getUniqueCode(newJoinCode, 'joinCodes')
+          const classInfo: ClassDoc = {
+            id: classDoc.id,
+            eventId,
+            schoolId: school.id,
+            name: className,
+            joinCode,
+            createdAt: nowIso(),
+          }
+          classes.push(classInfo)
+          touchedSchools.set(school.id, school)
+          batch.set(classDoc, { ...classInfo, createdAt: serverTimestamp() })
+          batch.set(doc(db, 'joinCodes', joinCode), clean({
+            eventId,
+            schoolId: school.id,
+            classId: classInfo.id,
+            schoolName: school.name,
+            className: classInfo.name,
+            state: school.state,
+            zone: school.zone,
+            createdAt: serverTimestamp(),
+          }))
+        }
+
+        await batch.commit()
+        return { schools: [...touchedSchools.values()], classes, skipped }
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async listEventSchools(eventId) {
+      try {
+        await ensureUser()
+        const schoolSnaps = await getDocs(collection(db, 'events', eventId, 'schools'))
+        const views: OrganizerSchoolView[] = []
+        for (const schoolSnap of schoolSnaps.docs) {
+          const school = asSchool(schoolSnap, eventId)
+          const classSnaps = await getDocs(collection(db, 'events', eventId, 'schools', school.id, 'classes'))
+          const classes = await Promise.all(
+            classSnaps.docs.map(async (classSnap) => {
+              const classInfo = asClass(classSnap, eventId, school.id)
+              const participantSnaps = await getDocs(collection(db, 'events', eventId, 'schools', school.id, 'classes', classInfo.id, 'participants'))
+              const boardSnaps = await getDocs(collection(db, 'events', eventId, 'schools', school.id, 'classes', classInfo.id, 'board'))
+              const participants = participantSnaps.docs.map((snap) => asParticipant(snap, { eventId, schoolId: school.id, classId: classInfo.id }))
+              return {
+                classInfo,
+                participantCount: participants.length,
+                approvedCount: participants.filter((participant) => participant.status === 'approved').length,
+                submittedCount: boardSnaps.size,
+              }
+            }),
+          )
+          views.push({ school, classes })
+        }
+        return views
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async resetTeacherCode(path) {
+      try {
+        await ensureUser()
+        const school = await readFullSchool(path)
+        const nextCode = await getUniqueCode(newTeacherCode, 'teacherCodes')
+        const batch = writeBatch(db)
+        batch.update(schoolRef(path), { teacherCode: nextCode })
+        batch.set(doc(db, 'teacherCodes', nextCode), clean({
+          eventId: path.eventId,
+          schoolId: path.schoolId,
+          schoolName: school.name,
+          state: school.state,
+          zone: school.zone,
+          createdAt: serverTimestamp(),
+        }))
+        if (school.teacherCode) batch.delete(doc(db, 'teacherCodes', school.teacherCode))
+        await batch.commit()
+        return nextCode
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async getEventStats(eventId) {
+      try {
+        await ensureUser()
+        const eventSnap = await getDoc(eventRef(eventId))
+        if (!eventSnap.exists()) throw new Error('EVENT_NOT_FOUND')
+        const schoolSnaps = await getDocs(collection(db, 'events', eventId, 'schools'))
+        let classCount = 0
+        let participantCount = 0
+        let attemptCount = 0
+        for (const schoolSnap of schoolSnaps.docs) {
+          const classSnaps = await getDocs(collection(db, 'events', eventId, 'schools', schoolSnap.id, 'classes'))
+          classCount += classSnaps.size
+          for (const classSnap of classSnaps.docs) {
+            const participantSnaps = await getDocs(collection(db, 'events', eventId, 'schools', schoolSnap.id, 'classes', classSnap.id, 'participants'))
+            participantCount += participantSnaps.size
+            for (const participantSnap of participantSnaps.docs) {
+              const attemptSnaps = await getDocs(
+                collection(db, 'events', eventId, 'schools', schoolSnap.id, 'classes', classSnap.id, 'participants', participantSnap.id, 'attempts'),
+              )
+              attemptCount += attemptSnaps.size
+            }
+          }
+        }
+        const stats: EventStats = {
+          event: asEvent(eventSnap),
+          schoolCount: schoolSnaps.size,
+          classCount,
+          participantCount,
+          attemptCount,
+        }
+        return stats
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async createAdminInvite() {
+      try {
+        const uid = await ensureUser()
+        const code = await getUniqueCode(newInviteCode, 'adminInvites')
+        await setDoc(doc(db, 'adminInvites', code), {
+          createdBy: uid,
+          usedBy: null,
+          createdAt: serverTimestamp(),
+        })
+        return code
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async redeemAdminInvite(code) {
+      try {
+        const uid = await ensureUser()
+        const normalized = normalizeCode(code)
+        const inviteSnap = await getDoc(doc(db, 'adminInvites', normalized))
+        if (!inviteSnap.exists() || inviteSnap.data().usedBy !== null) throw new Error('INVITE_NOT_FOUND')
+        const batch = writeBatch(db)
+        batch.update(doc(db, 'adminInvites', normalized), { usedBy: uid })
+        batch.set(doc(db, 'roles', uid), {
+          role: 'admin',
+          inviteCode: normalized,
+          createdAt: serverTimestamp(),
+        })
+        await batch.commit()
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async listRoles() {
+      try {
+        await ensureUser()
+        const snaps = await getDocs(collection(db, 'roles'))
+        return snaps.docs.map(asRole)
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async revokeRole(uid) {
+      try {
+        await ensureUser()
+        await deleteDoc(doc(db, 'roles', uid))
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
+    async getMyRole() {
+      try {
+        const user = auth.currentUser
+        if (!user || user.isAnonymous) return null
+        const snap = await getDoc(doc(db, 'roles', user.uid))
+        return snap.exists() ? asRole(snap) : null
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+  }
+}

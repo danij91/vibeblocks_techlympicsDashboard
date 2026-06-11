@@ -9,7 +9,6 @@ import {
   getDocs,
   getFirestore,
   serverTimestamp,
-  setDoc,
   writeBatch,
 } from 'firebase/firestore'
 import { webcrypto } from 'node:crypto'
@@ -27,9 +26,7 @@ const newTeacherCode = () => `T-${randomCode(8)}`
 
 function firebaseConfig() {
   const projectId = process.env.VITE_FIREBASE_PROJECT_ID
-  if (!projectId) {
-    throw new Error('VITE_FIREBASE_PROJECT_ID is required')
-  }
+  if (!projectId) throw new Error('VITE_FIREBASE_PROJECT_ID is required')
   return {
     apiKey: process.env.VITE_FIREBASE_API_KEY ?? 'demo',
     authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN ?? `${projectId}.firebaseapp.com`,
@@ -63,16 +60,14 @@ async function uniqueCode(db, collectionName, makeCode) {
   throw new Error(`Could not allocate ${collectionName} code`)
 }
 
-async function requireRole(db, uid) {
-  // 익명 uid는 실행마다 새로 발급되므로 "재실행" 방식은 성립 불가 —
-  // uid를 출력하고 역할 부여를 폴링 대기한다 (3s 간격, 최대 120s).
+async function requireAdminOrMaster(db, uid) {
   const deadline = Date.now() + 120_000
   let announced = false
   for (;;) {
     const snap = await getDoc(doc(db, 'roles', uid))
-    if (snap.exists() && ['admin', 'organizer'].includes(snap.data().role)) return
+    if (snap.exists() && ['admin', 'master'].includes(snap.data().role)) return snap.data().role
     if (!announced) {
-      console.log(`Waiting for role grant: create roles/${uid} with role "admin" or "organizer"`)
+      console.log(`Waiting for role grant: create roles/${uid} with role "master" or "admin"`)
       announced = true
     }
     if (Date.now() > deadline) throw new Error(`Timed out waiting for roles/${uid}`)
@@ -92,7 +87,7 @@ async function seed() {
     return
   }
 
-  await requireRole(db, uid)
+  const role = await requireAdminOrMaster(db, uid)
 
   const eventRef = doc(collection(db, 'events'))
   const event = {
@@ -100,9 +95,14 @@ async function seed() {
     name: 'Techlympics 2026 (Demo)',
     startsAt: Timestamp.fromDate(new Date('2026-06-01T00:00:00.000Z')),
     endsAt: Timestamp.fromDate(new Date('2026-12-31T23:59:59.000Z')),
-    maxAttempts: 3,
+    challenges: [
+      { slot: 'c1', missionId: 201, name: 'Challenge 1' },
+      { slot: 'c2', missionId: 202, name: 'Challenge 2' },
+      { slot: 'c3', missionId: 203, name: 'Challenge 3' },
+    ],
+    attemptsPerChallenge: 3,
     visibility: 'code-only',
-    scoringVersion: 'v1',
+    scoringVersion: 'v2',
     frozen: false,
     createdAt: serverTimestamp(),
   }
@@ -114,7 +114,7 @@ async function seed() {
 
   const batch = writeBatch(db)
   batch.set(eventRef, event)
-  const output = { eventId: eventRef.id, schools: [] }
+  const output = { eventId: eventRef.id, role, schools: [] }
 
   for (const row of rows) {
     const schoolRef = doc(collection(db, 'events', eventRef.id, 'schools'))

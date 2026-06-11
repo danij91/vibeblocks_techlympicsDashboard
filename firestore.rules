@@ -1,27 +1,29 @@
 rules_version = '2';
 
 // ============================================================
-// vb-116 Spark 무결성 — 서버(Functions) 없이 rules가 전선.
-// 초안 = Claude (Phase 0). 최종화·검증 = task vb-116-api-rules.
-// 핵심 invariants는 CONTRACT.md §4 — 거기서 어긋나면 rules가 틀린 것.
-// 기본 = deny. 아래 명시된 allow만 존재.
+// vb-116 Firestore rules v2 — CONTRACT.md v2 §4 invariants.
+// 기본 = deny. capability code 문서는 get만 공개, 본체 쓰기는 역할/소유권으로 제한.
 // ============================================================
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ---------- 헬퍼 ----------
+    // ---------- helpers ----------
     function authed() { return request.auth != null; }
-    function roleOf(uid) {
-      return get(/databases/$(database)/documents/roles/$(uid)).data.role;
+    function roleDoc(uid) {
+      return get(/databases/$(database)/documents/roles/$(uid)).data;
     }
     function hasRole() {
       return authed() && exists(/databases/$(database)/documents/roles/$(request.auth.uid));
     }
-    function isOrganizer() {
-      return hasRole() && (roleOf(request.auth.uid) == 'organizer' || roleOf(request.auth.uid) == 'admin');
+    function isMaster() {
+      return hasRole() && roleDoc(request.auth.uid).role == 'master';
     }
+    // admin = 주최측 권한. master는 포함관계상 admin 권한을 가진다.
     function isAdmin() {
-      return hasRole() && roleOf(request.auth.uid) == 'admin';
+      return hasRole() && (roleDoc(request.auth.uid).role == 'admin' || roleDoc(request.auth.uid).role == 'master');
+    }
+    function isTeacher() {
+      return hasRole() && roleDoc(request.auth.uid).role == 'teacher';
     }
     function isSchoolTeacher(eventId, schoolId) {
       return authed()
@@ -30,7 +32,6 @@ service cloud.firestore {
     function eventData(eventId) {
       return get(/databases/$(database)/documents/events/$(eventId)).data;
     }
-    // 제출 가능 창: 동결 아님 + 마감 전 (endsAt = Timestamp 저장 — CONTRACT §1)
     function eventOpen(eventId) {
       let e = eventData(eventId);
       return !e.frozen && request.time < e.endsAt;
@@ -38,6 +39,26 @@ service cloud.firestore {
     function timestampField(name) {
       return request.resource.data[name] is timestamp;
     }
+    function validSlot(slot) {
+      return slot in ['c1', 'c2', 'c3'];
+    }
+    function validMetrics(metrics) {
+      return metrics.keys().hasOnly([
+          'missionId', 'environment', 'solveMode', 'successRate',
+          'averageTimeSec', 'stars', 'blockCount'
+        ])
+        && metrics.missionId is int
+        && metrics.environment is string
+        && metrics.solveMode in ['ai', 'block']
+        && metrics.successRate is number
+        && metrics.successRate >= 0
+        && metrics.successRate <= 1
+        && (metrics.averageTimeSec is number || metrics.averageTimeSec == null)
+        && metrics.stars is int
+        && metrics.blockCount is int;
+    }
+
+    // ---------- capability mappings ----------
     function mappingKeys() {
       return ['eventId', 'schoolId', 'classId', 'participantId', 'createdAt'];
     }
@@ -49,6 +70,145 @@ service cloud.firestore {
         && existsAfter(participantPath)
         && getAfter(participantPath).data.ownerUid == request.auth.uid
         && getAfter(participantPath).data.recoveryHash == hash;
+    }
+
+    match /joinCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if isAdmin();
+    }
+    match /teacherCodes/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if isAdmin();
+    }
+    match /recoveryCodes/{hash} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if authed() && validRecoveryMapping(hash);
+      allow update, delete: if false;
+      match /claims/{uid} {
+        allow get: if authed() && uid == request.auth.uid;
+        allow list: if false;
+        allow create: if authed() && uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['claimedAt'])
+          && timestampField('claimedAt');
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- roles / master ----------
+    function validAdminInviteCreate() {
+      return request.resource.data.keys().hasOnly(['createdBy', 'usedBy', 'createdAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.usedBy == null
+        && timestampField('createdAt');
+    }
+    function validAdminInviteRedeem() {
+      return authed()
+        && resource.data.usedBy == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedBy'])
+        && request.resource.data.usedBy == request.auth.uid;
+    }
+    function validAdminRoleFromInvite(uid) {
+      return authed()
+        && uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['role', 'inviteCode', 'createdAt'])
+        && request.resource.data.role == 'admin'
+        && timestampField('createdAt')
+        && getAfter(/databases/$(database)/documents/adminInvites/$(request.resource.data.inviteCode)).data.usedBy == request.auth.uid;
+    }
+    function validTeacherRoleCreate(uid) {
+      return authed()
+        && uid == request.auth.uid
+        && request.resource.data.role == 'teacher'
+        && request.resource.data.keys().hasOnly(['role', 'createdAt', 'code', 'eventId', 'schoolId', 'schoolPaths'])
+        && timestampField('createdAt')
+        && request.resource.data.schoolPaths is list
+        && getAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId)/schools/$(request.resource.data.schoolId)/teachers/$(request.auth.uid)).data.code
+           == request.resource.data.code;
+    }
+    function validTeacherRoleUpdate(uid) {
+      return authed()
+        && uid == request.auth.uid
+        && resource.data.role == 'teacher'
+        && request.resource.data.role == 'teacher'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'schoolPaths']);
+    }
+    function validMasterRoleCreate() {
+      return request.resource.data.keys().hasOnly(['role', 'email', 'inviteCode', 'createdAt'])
+        && request.resource.data.role in ['teacher', 'admin']
+        && timestampField('createdAt');
+    }
+
+    match /adminInvites/{code} {
+      allow get: if authed();
+      allow list: if isMaster();
+      allow create: if isMaster() && validAdminInviteCreate();
+      allow update: if validAdminInviteRedeem();
+      allow delete: if isMaster();
+    }
+    match /roles/{uid} {
+      allow get: if authed() && (uid == request.auth.uid || isMaster());
+      allow list: if isMaster();
+      allow create: if validAdminRoleFromInvite(uid)
+        || validTeacherRoleCreate(uid)
+        || (isMaster() && validMasterRoleCreate());
+      allow update: if validTeacherRoleUpdate(uid);
+      allow delete: if isMaster();
+    }
+
+    // ---------- document validators ----------
+    function validEventWrite(eventId) {
+      return request.resource.data.keys().hasOnly([
+          'id', 'name', 'startsAt', 'endsAt', 'challenges',
+          'attemptsPerChallenge', 'visibility', 'scoringVersion', 'frozen', 'createdAt'
+        ])
+        && request.resource.data.id == eventId
+        && request.resource.data.name is string
+        && timestampField('startsAt')
+        && timestampField('endsAt')
+        && request.resource.data.challenges is list
+        && request.resource.data.challenges.size() == 3
+        && request.resource.data.attemptsPerChallenge is int
+        && request.resource.data.attemptsPerChallenge >= 1
+        && request.resource.data.attemptsPerChallenge <= 10
+        && request.resource.data.visibility in ['code-only', 'public-masked', 'public']
+        && request.resource.data.scoringVersion == 'v2'
+        && request.resource.data.frozen is bool
+        && timestampField('createdAt');
+    }
+    function validEventUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'startsAt', 'endsAt', 'attemptsPerChallenge', 'frozen', 'visibility'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.startsAt is timestamp
+        && request.resource.data.endsAt is timestamp
+        && request.resource.data.attemptsPerChallenge is int
+        && request.resource.data.attemptsPerChallenge >= 1
+        && request.resource.data.attemptsPerChallenge <= 10
+        && request.resource.data.visibility in ['code-only', 'public-masked', 'public']
+        && request.resource.data.frozen is bool;
+    }
+    function validSchoolWrite(eventId, schoolId) {
+      return request.resource.data.keys().hasOnly([
+          'id', 'eventId', 'name', 'state', 'zone', 'teacherCode', 'createdAt'
+        ])
+        && request.resource.data.id == schoolId
+        && request.resource.data.eventId == eventId
+        && request.resource.data.name is string
+        && request.resource.data.teacherCode is string
+        && timestampField('createdAt');
+    }
+    function validClassWrite(eventId, schoolId, classId) {
+      return request.resource.data.keys().hasOnly(['id', 'eventId', 'schoolId', 'name', 'joinCode', 'createdAt'])
+        && request.resource.data.id == classId
+        && request.resource.data.eventId == eventId
+        && request.resource.data.schoolId == schoolId
+        && request.resource.data.name is string
+        && request.resource.data.joinCode is string
+        && timestampField('createdAt');
     }
     function validParticipantCreate(eventId, schoolId, classId, participantId) {
       return request.resource.data.keys().hasOnly([
@@ -65,31 +225,6 @@ service cloud.firestore {
         && timestampField('registeredAt')
         && eventOpen(eventId);
     }
-    function validAttemptCreate(eventId, schoolId, classId, participantId, attemptId) {
-      let participant = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data;
-      return request.resource.data.keys().hasOnly(['attemptNo', 'metrics', 'submittedAt'])
-        && participant.ownerUid == request.auth.uid
-        && participant.status != 'rejected'
-        && attemptId == participantId + '_' + string(request.resource.data.attemptNo)
-        && request.resource.data.attemptNo >= 1
-        && request.resource.data.attemptNo <= eventData(eventId).maxAttempts
-        && timestampField('submittedAt')
-        && eventOpen(eventId);
-    }
-    function validBoardWrite(eventId, schoolId, classId, participantId) {
-      let participant = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data;
-      let attempt = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)/attempts/$(participantId + '_' + string(request.resource.data.bestAttemptNo))).data;
-      return request.resource.data.keys().hasOnly([
-          'participantId', 'publicId', 'name', 'status', 'bestAttemptNo', 'metrics', 'updatedAt'
-        ])
-        && participant.ownerUid == request.auth.uid
-        && request.resource.data.participantId == participantId
-        && request.resource.data.publicId == participant.publicId
-        && request.resource.data.name == participant.name
-        && request.resource.data.status == participant.status
-        && request.resource.data.metrics == attempt.metrics
-        && timestampField('updatedAt');
-    }
     function validTeacherStatusBoardUpdate() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
         && request.resource.data.status in ['pending', 'approved', 'rejected'];
@@ -101,130 +236,129 @@ service cloud.firestore {
         && request.resource.data.recoveryHash == resource.data.recoveryHash;
     }
 
-    // ---------- capability 매핑 (경로 = 비밀. get만, list 금지) ----------
-    match /joinCodes/{code} {
-      allow get: if true;
-      allow list: if false;
-      allow create, update, delete: if isOrganizer();
+    // ---------- attempts / board ----------
+    function validAttemptCreate(eventId, schoolId, classId, participantId, attemptId) {
+      let participant = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data;
+      return request.resource.data.keys().hasOnly(['slot', 'attemptNo', 'metrics', 'submittedAt'])
+        && participant.ownerUid == request.auth.uid
+        && participant.status != 'rejected'
+        && validSlot(request.resource.data.slot)
+        && attemptId == participantId + '_' + request.resource.data.slot + '_' + string(request.resource.data.attemptNo)
+        && request.resource.data.attemptNo is int
+        && request.resource.data.attemptNo >= 1
+        && request.resource.data.attemptNo <= eventData(eventId).attemptsPerChallenge
+        && validMetrics(request.resource.data.metrics)
+        && timestampField('submittedAt')
+        && eventOpen(eventId);
     }
-    match /teacherCodes/{code} {
-      allow get: if true;
-      allow list: if false;
-      allow create, update, delete: if isOrganizer();
+    function boardAttempt(eventId, schoolId, classId, participantId, slot) {
+      return get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)/attempts/$(participantId + '_' + slot + '_' + string(request.resource.data.bests[slot].attemptNo))).data;
     }
-    match /recoveryCodes/{hash} {
-      allow get: if true;
-      allow list: if false;
-      // joinClass 시 학생이 자기 participant와 같은 batch에서 생성.
-      allow create: if authed() && validRecoveryMapping(hash);
-      allow update, delete: if false;
-      // 기기 재바인딩 증명: 코드(=경로)를 아는 클라이언트만 claim 생성 가능
-      match /claims/{uid} {
-        allow get: if authed() && uid == request.auth.uid;
-        allow list: if false;
-        allow create: if authed() && uid == request.auth.uid
-          && request.resource.data.keys().hasOnly(['claimedAt'])
-          && timestampField('claimedAt');
-        allow update, delete: if false;
-      }
+    function validBoardBest(eventId, schoolId, classId, participantId, slot) {
+      let best = request.resource.data.bests[slot];
+      let attempt = boardAttempt(eventId, schoolId, classId, participantId, slot);
+      return best.keys().hasOnly(['attemptNo', 'timeSec', 'metrics'])
+        && best.attemptNo is int
+        && best.timeSec is number
+        && validMetrics(best.metrics)
+        && attempt.slot == slot
+        && attempt.attemptNo == best.attemptNo
+        && attempt.metrics == best.metrics
+        && attempt.metrics.successRate == 1
+        && attempt.metrics.averageTimeSec is number
+        && best.timeSec == attempt.metrics.averageTimeSec;
+    }
+    function validPresentBest(eventId, schoolId, classId, participantId, slot) {
+      return !request.resource.data.bests.keys().hasAny([slot])
+        || validBoardBest(eventId, schoolId, classId, participantId, slot);
+    }
+    function existingBestKeptOrImproved(slot) {
+      return !resource.data.bests.keys().hasAny([slot])
+        || (request.resource.data.bests.keys().hasAny([slot])
+            && request.resource.data.bests[slot].timeSec <= resource.data.bests[slot].timeSec);
+    }
+    function validBoardWrite(eventId, schoolId, classId, participantId) {
+      let participant = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data;
+      return request.resource.data.keys().hasOnly([
+          'participantId', 'publicId', 'name', 'status', 'bests', 'updatedAt'
+        ])
+        && participant.ownerUid == request.auth.uid
+        && request.resource.data.participantId == participantId
+        && request.resource.data.publicId == participant.publicId
+        && request.resource.data.name == participant.name
+        && request.resource.data.status == participant.status
+        && request.resource.data.bests is map
+        && request.resource.data.bests.keys().hasOnly(['c1', 'c2', 'c3'])
+        && validPresentBest(eventId, schoolId, classId, participantId, 'c1')
+        && validPresentBest(eventId, schoolId, classId, participantId, 'c2')
+        && validPresentBest(eventId, schoolId, classId, participantId, 'c3')
+        && timestampField('updatedAt');
+    }
+    function validBoardUpdate(eventId, schoolId, classId, participantId) {
+      return validBoardWrite(eventId, schoolId, classId, participantId)
+        && request.resource.data.bests.keys().hasAll(resource.data.bests.keys())
+        && existingBestKeptOrImproved('c1')
+        && existingBestKeptOrImproved('c2')
+        && existingBestKeptOrImproved('c3');
     }
 
-    // ---------- 역할 ----------
-    match /organizerInvites/{code} {
-      allow get: if authed();
-      allow list: if isAdmin();
-      allow create: if isAdmin()
-        && request.resource.data.keys().hasOnly(['createdBy', 'usedBy', 'createdAt'])
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.usedBy == null
-        && timestampField('createdAt');
-      allow delete: if isAdmin();
-      // redeem 마킹 (usedBy 1회 기록)
-      allow update: if authed() && resource.data.usedBy == null
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedBy'])
-        && request.resource.data.usedBy == request.auth.uid;
-    }
-    match /roles/{uid} {
-      allow get: if authed() && (uid == request.auth.uid || isAdmin());
-      allow list: if isAdmin();
-      // admin 발급 또는 초대코드 redeem (본인, organizer 한정, 미사용 코드)
-      allow create: if isAdmin()
-        || (authed() && uid == request.auth.uid
-            && request.resource.data.role == 'organizer'
-            && getAfter(/databases/$(database)/documents/organizerInvites/$(request.resource.data.inviteCode)).data.usedBy == request.auth.uid)
-        || (authed() && uid == request.auth.uid
-            && request.resource.data.role == 'teacher'
-            && getAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId)/schools/$(request.resource.data.schoolId)/teachers/$(request.auth.uid)).data.code
-               == request.resource.data.code);
-      allow update: if isAdmin()
-        || (authed() && uid == request.auth.uid
-            && resource.data.role == 'teacher'
-            && request.resource.data.role == 'teacher');
-      allow delete: if isAdmin();
-    }
-
-    // ---------- 본체 ----------
+    // ---------- main tree ----------
     match /events/{eventId} {
-      allow get: if true; // 이벤트 메타는 코드 경유 도달 — 민감정보 없음
-      allow list: if isOrganizer();
-      allow create, update: if isOrganizer();
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if isAdmin() && validEventWrite(eventId);
+      allow update: if isAdmin() && validEventUpdate();
       allow delete: if false;
 
       match /schools/{schoolId} {
-        allow get: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
-        allow list: if isOrganizer();
-        allow create, update: if isOrganizer();
+        allow get: if isSchoolTeacher(eventId, schoolId) || isAdmin();
+        allow list: if isAdmin();
+        allow create, update: if isAdmin() && validSchoolWrite(eventId, schoolId);
         allow delete: if false;
 
-        // 교사↔학교 바인딩. create 조건 = 교사코드 일치 (가입 게이트의 실체)
         match /teachers/{uid} {
-          allow get: if authed() && (uid == request.auth.uid || isOrganizer());
-          allow list: if isOrganizer();
+          allow get: if authed() && (uid == request.auth.uid || isAdmin());
+          allow list: if isAdmin();
           allow create: if authed() && uid == request.auth.uid
             && request.resource.data.keys().hasOnly(['code', 'boundAt'])
             && request.resource.data.code
                == get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)).data.teacherCode
             && timestampField('boundAt');
           allow update: if false;
-          allow delete: if isOrganizer();
+          allow delete: if isAdmin();
         }
 
         match /classes/{classId} {
-          allow get: if true; // 경로 자체가 capability (joinCodes 경유로만 도달 가능)
-          allow list: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
-          allow create, update: if isOrganizer();
+          allow get: if true;
+          allow list: if isSchoolTeacher(eventId, schoolId) || isAdmin();
+          allow create, update: if isAdmin() && validClassWrite(eventId, schoolId, classId);
           allow delete: if false;
 
-          // 리더보드 비정규화 — code-only 공개의 실체 (읽기 1회/행)
           match /board/{participantId} {
             allow get, list: if true;
-            // 본인 entry만 + metrics가 실제 attempt 원본과 일치할 때만 (위변조 차단)
             allow create: if authed() && validBoardWrite(eventId, schoolId, classId, participantId);
-            allow update: if (authed() && validBoardWrite(eventId, schoolId, classId, participantId))
-              || ((isSchoolTeacher(eventId, schoolId) || isOrganizer()) && validTeacherStatusBoardUpdate());
-            allow delete: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
+            allow update: if (authed() && validBoardUpdate(eventId, schoolId, classId, participantId))
+              || ((isSchoolTeacher(eventId, schoolId) || isAdmin()) && validTeacherStatusBoardUpdate());
+            allow delete: if isSchoolTeacher(eventId, schoolId) || isAdmin();
           }
 
           match /participants/{participantId} {
             allow get: if authed()
               && (resource.data.ownerUid == request.auth.uid
-                  || isSchoolTeacher(eventId, schoolId) || isOrganizer());
-            allow list: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
-            // 학생 등록: 본인 uid, pending 시작, 행사 열림
+                  || isSchoolTeacher(eventId, schoolId) || isAdmin());
+            allow list: if isSchoolTeacher(eventId, schoolId) || isAdmin();
             allow create: if authed() && validParticipantCreate(eventId, schoolId, classId, participantId);
-            // 교사/주최측: 상태 전환 등 | 학생 본인: ownerUid 재바인딩만 (recovery claim 증명)
-            allow update: if ((isSchoolTeacher(eventId, schoolId) || isOrganizer()) && validTeacherParticipantStatusUpdate())
+            allow update: if ((isSchoolTeacher(eventId, schoolId) || isAdmin()) && validTeacherParticipantStatusUpdate())
               || (authed()
                   && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerUid'])
                   && request.resource.data.ownerUid == request.auth.uid
                   && exists(/databases/$(database)/documents/recoveryCodes/$(resource.data.recoveryHash)/claims/$(request.auth.uid)));
             allow delete: if false;
 
-            // 공식 시도 — 문서 ID 고정 + create-only = 시도 상한의 물리적 강제
             match /attempts/{attemptId} {
               allow get, list: if authed()
                 && (get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
-                    || isSchoolTeacher(eventId, schoolId) || isOrganizer());
+                    || isSchoolTeacher(eventId, schoolId) || isAdmin());
               allow create: if authed() && validAttemptCreate(eventId, schoolId, classId, participantId, attemptId);
               allow update, delete: if false;
             }

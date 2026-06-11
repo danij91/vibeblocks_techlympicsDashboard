@@ -2,9 +2,9 @@
 
 These scripts use the Firebase client SDK. They do not deploy rules.
 
-## One-time admin role
+## One-time master/admin role
 
-Firestore rules cannot mint the first admin. Create one manually:
+Firestore rules cannot mint the first `master` role. Create it manually:
 
 1. Run `node scripts/seed.mjs --whoami`.
 2. Copy the printed anonymous `uid`.
@@ -12,12 +12,12 @@ Firestore rules cannot mint the first admin. Create one manually:
 
 ```json
 {
-  "role": "admin",
+  "role": "master",
   "createdAt": "<server timestamp>"
 }
 ```
 
-For an organizer-only seed account, use `"role": "organizer"` instead. The seed script writes demo data through normal client writes, so this role must exist before seeding.
+The seed script also accepts `"role": "admin"` because event/school seeding only needs admin-level writes. `master` is required for issuing `adminInvites`.
 
 ## Seed demo data
 
@@ -43,7 +43,7 @@ export FIREBASE_AUTH_EMULATOR_HOST="127.0.0.1:9099"
 node scripts/seed.mjs
 ```
 
-Seed output includes event, school, class, teacher, and join codes.
+Seed output includes a v2 event with challenges 201/202/203, `attemptsPerChallenge`, school IDs, class join codes, and teacher codes.
 
 ## Rules invariant check
 
@@ -59,10 +59,11 @@ Then run:
 node scripts/check-rules.mjs
 ```
 
-The checker loads `firestore.rules` through `firebase emulators:exec` style REST calls when the emulator is already running. It verifies these required denials:
+The checker verifies these v2 invariants:
 
-- 4th attempt is rejected.
-- Frozen event attempt is rejected.
-- Forged board entry for another participant is rejected.
-- Bad teacher code binding is rejected.
-- `ownerUid` rebinding without a recovery claim is rejected.
+- Slot 4th attempt is rejected.
+- Another slot is still available after one slot is exhausted.
+- Frozen event attempts are rejected.
+- Forged board bests are rejected when they point at another attempt, a failed run, or mismatched `timeSec`.
+- A `teacher` role cannot issue `adminInvites`.
+- A user cannot create their own `master` role.
