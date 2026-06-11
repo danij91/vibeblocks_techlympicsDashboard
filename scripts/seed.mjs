@@ -64,9 +64,19 @@ async function uniqueCode(db, collectionName, makeCode) {
 }
 
 async function requireRole(db, uid) {
-  const snap = await getDoc(doc(db, 'roles', uid))
-  if (!snap.exists() || !['admin', 'organizer'].includes(snap.data().role)) {
-    throw new Error(`Create roles/${uid} with role "admin" or "organizer", then rerun.`)
+  // 익명 uid는 실행마다 새로 발급되므로 "재실행" 방식은 성립 불가 —
+  // uid를 출력하고 역할 부여를 폴링 대기한다 (3s 간격, 최대 120s).
+  const deadline = Date.now() + 120_000
+  let announced = false
+  for (;;) {
+    const snap = await getDoc(doc(db, 'roles', uid))
+    if (snap.exists() && ['admin', 'organizer'].includes(snap.data().role)) return
+    if (!announced) {
+      console.log(`Waiting for role grant: create roles/${uid} with role "admin" or "organizer"`)
+      announced = true
+    }
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for roles/${uid}`)
+    await new Promise((resolve) => setTimeout(resolve, 3000))
   }
 }
 
