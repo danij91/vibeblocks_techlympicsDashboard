@@ -1,0 +1,295 @@
+.ops-shell {
+  min-height: 100vh;
+  padding: 24px;
+  color: #172033;
+}
+
+.ops-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.ops-eyebrow {
+  margin: 0 0 4px;
+  color: #526070;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.ops-topbar h1,
+.ops-panel h2,
+.ops-panel h3 {
+  margin: 0;
+}
+
+.ops-subtle {
+  color: #5f6b7a;
+  font-size: 14px;
+}
+
+.ops-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.ops-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.ops-panel,
+.ops-card {
+  background: #ffffff;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(20, 30, 45, 0.04);
+}
+
+.ops-panel {
+  padding: 16px;
+}
+
+.ops-card {
+  padding: 14px;
+}
+
+.ops-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.ops-button,
+.ops-tab,
+.ops-input,
+.ops-select,
+.ops-file {
+  min-height: 38px;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.ops-button,
+.ops-tab {
+  border: 1px solid #b9c5d4;
+  background: #ffffff;
+  color: #172033;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 8px 12px;
+}
+
+.ops-button:hover,
+.ops-tab:hover {
+  border-color: #526b91;
+}
+
+.ops-button.primary,
+.ops-tab.active {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #ffffff;
+}
+
+.ops-button.danger {
+  border-color: #d24b4b;
+  color: #a12727;
+}
+
+.ops-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ops-form {
+  display: grid;
+  gap: 10px;
+}
+
+.ops-form.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ops-label {
+  display: grid;
+  gap: 5px;
+  color: #344154;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ops-input,
+.ops-select,
+.ops-file {
+  width: 100%;
+  border: 1px solid #c8d2df;
+  background: #ffffff;
+  color: #172033;
+  padding: 7px 9px;
+}
+
+.ops-table-wrap {
+  overflow-x: auto;
+}
+
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.ops-table th,
+.ops-table td {
+  border-bottom: 1px solid #e3e8ef;
+  padding: 9px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.ops-table th {
+  color: #526070;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.ops-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ops-stat {
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.ops-stat strong {
+  display: block;
+  font-size: 28px;
+}
+
+.ops-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #eef3f8;
+  color: #39495e;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 8px;
+}
+
+.ops-pill.warn {
+  background: #fff4d8;
+  color: #7a4d00;
+}
+
+.ops-pill.ok {
+  background: #e7f7ed;
+  color: #1b6b38;
+}
+
+.ops-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ops-event-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ops-event-button {
+  width: 100%;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  cursor: pointer;
+  padding: 10px;
+  text-align: left;
+}
+
+.ops-event-button.active {
+  border-color: #1f6feb;
+  box-shadow: inset 3px 0 0 #1f6feb;
+}
+
+.ops-alert {
+  border: 1px solid #efc6c6;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #8a2424;
+  padding: 12px;
+}
+
+.ops-success {
+  border-color: #b8dfc3;
+  background: #f1fbf4;
+  color: #1b6b38;
+}
+
+.ops-print-area {
+  display: none;
+}
+
+.ops-print-sheet {
+  break-after: page;
+  display: grid;
+  min-height: 92vh;
+  place-items: center;
+  text-align: center;
+}
+
+.ops-print-sheet h2 {
+  font-size: 30px;
+  margin: 0 0 8px;
+}
+
+.ops-print-code {
+  border: 2px solid #172033;
+  border-radius: 8px;
+  display: inline-block;
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  margin-top: 16px;
+  padding: 10px 18px;
+}
+
+@media (max-width: 920px) {
+  .ops-grid,
+  .ops-form.two,
+  .ops-stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .ops-print-area,
+  .ops-print-area * {
+    visibility: visible;
+  }
+
+  .ops-print-area {
+    display: block;
+    left: 0;
+    position: absolute;
+    top: 0;
+    width: 100%;
+  }
+}
