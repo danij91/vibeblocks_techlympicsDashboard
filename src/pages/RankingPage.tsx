@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { normalizeCode } from '../api/codes'
-import { computeScore } from '../api/scoring'
+import { formatSec } from '../api/scoring'
 import type { JoinInfo, LeaderboardRow } from '../api/types'
 import styles from '../features/ranking/publicPages.module.css'
 
@@ -12,9 +12,8 @@ function errorCode(error: unknown): string {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR'
 }
 
-function displayScore(row: LeaderboardRow, info: JoinInfo | null): number | null {
-  if (!row.metrics) return row.score
-  return computeScore(row.metrics, info?.event.scoringVersion)
+function totalAttempts(row: LeaderboardRow): number {
+  return row.attemptsUsed.c1 + row.attemptsUsed.c2 + row.attemptsUsed.c3
 }
 
 function statusLabel(status: LeaderboardRow['status']): string {
@@ -78,7 +77,7 @@ export default function RankingPage() {
     return () => window.clearInterval(timer)
   }, [load])
 
-  const visibleRows = rows.filter((row) => row.status !== 'pending' || row.rank !== null || row.attemptsUsed > 0)
+  const visibleRows = rows.filter((row) => row.status !== 'pending' || row.rank !== null || totalAttempts(row) > 0)
   const submittedRows = visibleRows.filter((row) => row.rank !== null).length
   const pendingRows = visibleRows.filter((row) => row.status === 'pending').length
 
@@ -189,8 +188,8 @@ export default function RankingPage() {
                       <span className={styles.statusChip}>{statusLabel(row.status)}</span>
                     </td>
                     <td>{row.publicId}</td>
-                    <td>{displayScore(row, info)?.toLocaleString() ?? '-'}</td>
-                    <td>{row.attemptsUsed}</td>
+                    <td>{formatSec(row.averageSec)}</td>
+                    <td>{totalAttempts(row)}</td>
                   </tr>
                 ))}
               </tbody>

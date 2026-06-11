@@ -676,8 +676,8 @@ function LeaderboardPreview({ rows }: { rows: LeaderboardRow[] }) {
                 <td>
                   <span className={`status ${row.status}`}>{statusLabel(row.status)}</span>
                 </td>
-                <td>{row.score ?? '-'}</td>
-                <td>{row.attemptsUsed}</td>
+                <td>{row.averageSec === null ? '-' : `${row.averageSec.toFixed(1)}s`}</td>
+                <td>{row.attemptsUsed.c1 + row.attemptsUsed.c2 + row.attemptsUsed.c3}</td>
               </tr>
             ))}
           </tbody>

@@ -41,7 +41,7 @@ const blankEvent = () => {
     name: '',
     startsAt: toDateTimeLocal(start.toISOString()),
     endsAt: toDateTimeLocal(end.toISOString()),
-    maxAttempts: 3,
+    attemptsPerChallenge: 3,
   }
 }
 
@@ -167,7 +167,7 @@ function RoleGate({ children }: { children: React.ReactNode }) {
 
   if (loading) return <main className="ops-shell">Loading organizer access...</main>
   if (error) return <main className="ops-shell"><div className="ops-alert">{error}</div></main>
-  if (role?.role !== 'organizer' && role?.role !== 'admin') {
+  if (role?.role !== 'admin' && role?.role !== 'master') {
     return (
       <main className="ops-shell">
         <div className="ops-panel">
@@ -175,8 +175,8 @@ function RoleGate({ children }: { children: React.ReactNode }) {
           <h1>Organizer workspace</h1>
           <p className="ops-subtle">This area requires an organizer or admin role.</p>
           <div className="ops-row-actions">
-            <button className="ops-button primary" onClick={() => { window.__mockRole?.('organizer'); void refresh() }}>Mock organizer</button>
-            <button className="ops-button" onClick={() => { window.__mockRole?.('admin'); void refresh() }}>Mock admin</button>
+            <button className="ops-button primary" onClick={() => { window.__mockRole?.('admin'); void refresh() }}>Mock organizer</button>
+            <button className="ops-button" onClick={() => { window.__mockRole?.('master'); void refresh() }}>Mock admin</button>
           </div>
         </div>
       </main>
@@ -319,7 +319,7 @@ function EventEditor({ event, onSaved }: { event?: EventDoc; onSaved: (message: 
         name: event.name,
         startsAt: toDateTimeLocal(event.startsAt),
         endsAt: toDateTimeLocal(event.endsAt),
-        maxAttempts: event.maxAttempts,
+        attemptsPerChallenge: event.attemptsPerChallenge,
       })
     }
   }, [event])
@@ -332,7 +332,7 @@ function EventEditor({ event, onSaved }: { event?: EventDoc; onSaved: (message: 
           name: form.name,
           startsAt: fromDateTimeLocal(form.startsAt),
           endsAt: fromDateTimeLocal(form.endsAt),
-          maxAttempts: form.maxAttempts,
+          attemptsPerChallenge: form.attemptsPerChallenge,
         })
         onSaved('Event updated.')
       } else {
@@ -340,7 +340,7 @@ function EventEditor({ event, onSaved }: { event?: EventDoc; onSaved: (message: 
           name: form.name,
           startsAt: fromDateTimeLocal(form.startsAt),
           endsAt: fromDateTimeLocal(form.endsAt),
-          maxAttempts: form.maxAttempts,
+          attemptsPerChallenge: form.attemptsPerChallenge,
         })
         onSaved(`Event created: ${created.name}`)
       }
@@ -356,7 +356,7 @@ function EventEditor({ event, onSaved }: { event?: EventDoc; onSaved: (message: 
         name: form.name || 'New Techlympics Event',
         startsAt: fromDateTimeLocal(form.startsAt),
         endsAt: fromDateTimeLocal(form.endsAt),
-        maxAttempts: form.maxAttempts,
+        attemptsPerChallenge: form.attemptsPerChallenge,
       })
       onSaved(`Event created: ${created.name}`)
     } catch (err) {
@@ -386,7 +386,7 @@ function EventEditor({ event, onSaved }: { event?: EventDoc; onSaved: (message: 
       {error && <div className="ops-alert">{error}</div>}
       <div className="ops-form two">
         <label className="ops-label">Name<input className="ops-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-        <label className="ops-label">Max attempts<input className="ops-input" min={1} type="number" value={form.maxAttempts} onChange={(e) => setForm({ ...form, maxAttempts: Number(e.target.value) })} /></label>
+        <label className="ops-label">Max attempts<input className="ops-input" min={1} type="number" value={form.attemptsPerChallenge} onChange={(e) => setForm({ ...form, attemptsPerChallenge: Number(e.target.value) })} /></label>
         <label className="ops-label">Starts at<input className="ops-input" type="datetime-local" value={form.startsAt} onChange={(e) => setForm({ ...form, startsAt: e.target.value })} /></label>
         <label className="ops-label">Ends at<input className="ops-input" type="datetime-local" value={form.endsAt} onChange={(e) => setForm({ ...form, endsAt: e.target.value })} /></label>
       </div>

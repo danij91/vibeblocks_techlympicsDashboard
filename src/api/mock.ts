@@ -1,12 +1,14 @@
 // ============================================================
-// Mock 구현 — UI task 병렬 개발용 인메모리 데이터. CONTRACT §8.
-// 시드: 이벤트 1 + 학교 2 + 학급 3 + 참가자 — 데모 코드는 README 참조.
-// 실서비스 동작은 vb-116-api-rules task의 firestore.ts가 담당.
+// Mock 구현 v2 — UI task 병렬 개발용 인메모리 데이터. CONTRACT §8.
+// 시드: 이벤트 1(도전 3) + 학교 2 + 학급 3 + 참가자 — 데모 코드는 README 참조.
+// 실서비스 동작은 vb-116-api-rules-v2의 firestore.ts가 담당.
 // ============================================================
 import type { CompetitionApi } from './index'
 import type {
   AttemptDoc,
   AttemptMetrics,
+  BoardEntryDoc,
+  ChallengeSlot,
   ClassDoc,
   ClassPath,
   EventDoc,
@@ -21,16 +23,16 @@ import type {
   SchoolPath,
   TeacherSchoolView,
 } from './types'
+import { CHALLENGE_SLOTS } from './types'
 import { newJoinCode, newPublicId, newRecoveryCode, newTeacherCode, newInviteCode, normalizeCode, sha256Hex } from './codes'
-import { compareEntries, computeScore, isBetter } from './scoring'
-import type { BoardEntryDoc } from './types'
+import { averageSec, compareEntries, isBetter, recordTimeSec } from './scoring'
 
 interface Store {
   events: EventDoc[]
   schools: SchoolDoc[]
   classes: ClassDoc[]
   participants: ParticipantDoc[]
-  attempts: Map<string, AttemptDoc[]> // participantId → attempts
+  attempts: Map<string, AttemptDoc[]> // participantId → attempts (전 슬롯)
   board: Map<string, BoardEntryDoc[]> // classId → entries
   recovery: Map<string, string> // recoveryCode → participantId
   invites: Set<string>
@@ -41,15 +43,24 @@ interface Store {
 const now = () => new Date().toISOString()
 const uid = () => `mock-${Math.random().toString(36).slice(2, 10)}`
 
+function emptyUsed(): Record<ChallengeSlot, number> {
+  return { c1: 0, c2: 0, c3: 0 }
+}
+
 function seed(): Store {
   const event: EventDoc = {
     id: 'evt-demo',
     name: 'Techlympics 2026 (Demo)',
     startsAt: '2026-06-01T00:00:00.000Z',
     endsAt: '2026-12-31T23:59:59.000Z',
-    maxAttempts: 3,
+    challenges: [
+      { slot: 'c1', missionId: 201, name: 'Challenge 1' },
+      { slot: 'c2', missionId: 202, name: 'Challenge 2' },
+      { slot: 'c3', missionId: 203, name: 'Challenge 3' },
+    ],
+    attemptsPerChallenge: 3,
     visibility: 'code-only',
-    scoringVersion: 'v1',
+    scoringVersion: 'v2',
     frozen: false,
     createdAt: now(),
   }
@@ -76,30 +87,44 @@ function seed(): Store {
     registeredAt: now(),
     statusHistory: [],
   }))
+
+  const mk = (missionId: number, t: number | null, ok = true): AttemptMetrics => ({
+    missionId,
+    environment: 'gym',
+    solveMode: 'block',
+    successRate: ok && t !== null ? 1 : 2 / 3,
+    averageTimeSec: t,
+    stars: 4,
+    blockCount: 9,
+  })
+
   const attempts = new Map<string, AttemptDoc[]>()
   const board = new Map<string, BoardEntryDoc[]>()
   const entries: BoardEntryDoc[] = []
-  participants.slice(0, 4).forEach((p, i) => {
-    const metrics: AttemptMetrics = {
-      missionId: 'mission-demo-1',
-      environment: 'gym',
-      solveMode: i % 2 === 0 ? 'ai' : 'block',
-      successRate: [1, 1, 2 / 3, 1][i],
-      averageTimeSec: [42.5, 55.1, null, 71.3][i],
-      stars: [5, 4, 2, 3][i],
-      blockCount: [1, 12, 9, 15][i],
+  // p0: 3도전 완주(랭킹) / p1: 3도전 완주(랭킹, 더 느림) / p2(pending): 2도전만 / p3: 1도전만
+  const plans: [number, Partial<Record<ChallengeSlot, number[]>>][] = [
+    [0, { c1: [52.4, 44.1], c2: [61.0], c3: [38.9] }],
+    [1, { c1: [49.7], c2: [70.2, 66.5], c3: [41.2] }],
+    [2, { c1: [55.0], c2: [88.8] }],
+    [3, { c1: [62.3] }],
+  ]
+  for (const [pi, plan] of plans) {
+    const p = participants[pi]
+    const list: AttemptDoc[] = []
+    const bests: BoardEntryDoc['bests'] = {}
+    for (const slot of CHALLENGE_SLOTS) {
+      const times = plan[slot] ?? []
+      times.forEach((t, i) => {
+        const missionId = 200 + Number(slot[1])
+        const m = mk(missionId, t)
+        list.push({ id: `${p.id}_${slot}_${i + 1}`, slot, attemptNo: i + 1, metrics: m, submittedAt: now() })
+        const best = bests[slot]
+        if (!best || t < best.timeSec) bests[slot] = { attemptNo: i + 1, timeSec: t, metrics: m }
+      })
     }
-    attempts.set(p.id, [{ id: `${p.id}_1`, attemptNo: 1, metrics, submittedAt: now() }])
-    entries.push({
-      participantId: p.id,
-      publicId: p.publicId,
-      name: p.name,
-      status: p.status,
-      bestAttemptNo: 1,
-      metrics,
-      updatedAt: now(),
-    })
-  })
+    attempts.set(p.id, list)
+    entries.push({ participantId: p.id, publicId: p.publicId, name: p.name, status: p.status, bests, updatedAt: now() })
+  }
   board.set('cls-k3a', entries)
   return {
     events: [event],
@@ -119,8 +144,7 @@ export function createMockApi(): CompetitionApi {
   const s = seed()
   const delay = <T,>(v: T): Promise<T> => new Promise((r) => setTimeout(() => r(v), 150))
 
-  // UI 개발 편의: 콘솔에서 역할 전환 — __mockRole('teacher'|'organizer'|'admin'|null)
-  // mock 전용 escape hatch (CONTRACT §8). firestore 구현엔 존재하지 않음.
+  // UI 개발 편의: 콘솔 __mockRole('teacher'|'admin'|'master'|null) — mock 전용 (CONTRACT §8)
   if (typeof window !== 'undefined') {
     window.__mockRole = (role) => {
       if (role === null) {
@@ -144,6 +168,12 @@ export function createMockApi(): CompetitionApi {
 
   const requireRole = (roles: string[]) => {
     if (!s.myRole || !roles.includes(s.myRole.role)) throw new Error('FORBIDDEN')
+  }
+
+  const usedBySlot = (pid: string): Record<ChallengeSlot, number> => {
+    const used = emptyUsed()
+    for (const a of s.attempts.get(pid) ?? []) used[a.slot] += 1
+    return used
   }
 
   return {
@@ -182,50 +212,62 @@ export function createMockApi(): CompetitionApi {
       return delay({ ...findClassByCode(c.joinCode), participant: p })
     },
 
-    async submitAttempt(p: ParticipantPath, metrics) {
+    async submitAttempt(p: ParticipantPath, slot, metrics) {
       const participant = s.participants.find((x) => x.id === p.participantId)
       if (!participant) throw new Error('PARTICIPANT_NOT_FOUND')
       if (participant.status === 'rejected') throw new Error('REJECTED')
       const event = s.events.find((x) => x.id === p.eventId)!
       if (event.frozen) throw new Error('EVENT_FROZEN')
       const list = s.attempts.get(participant.id) ?? []
-      if (list.length >= event.maxAttempts) throw new Error('NO_ATTEMPTS_LEFT')
-      const attemptNo = list.length + 1
-      list.push({ id: `${participant.id}_${attemptNo}`, attemptNo, metrics, submittedAt: now() })
+      const slotUsed = list.filter((a) => a.slot === slot).length
+      if (slotUsed >= event.attemptsPerChallenge) throw new Error('NO_ATTEMPTS_LEFT')
+      const attemptNo = slotUsed + 1
+      list.push({ id: `${participant.id}_${slot}_${attemptNo}`, slot, attemptNo, metrics, submittedAt: now() })
       s.attempts.set(participant.id, list)
-      // board 갱신 (best만)
+
       const entries = s.board.get(p.classId) ?? []
-      const mine = entries.find((e) => e.participantId === participant.id)
-      if (!mine || isBetter(metrics, mine.metrics)) {
-        const next: BoardEntryDoc = {
-          participantId: participant.id,
-          publicId: participant.publicId,
-          name: participant.name,
-          status: participant.status,
-          bestAttemptNo: attemptNo,
-          metrics,
-          updatedAt: now(),
-        }
-        s.board.set(p.classId, [...entries.filter((e) => e.participantId !== participant.id), next])
+      let mine = entries.find((e) => e.participantId === participant.id)
+      if (!mine) {
+        mine = { participantId: participant.id, publicId: participant.publicId, name: participant.name, status: participant.status, bests: {}, updatedAt: now() }
+        entries.push(mine)
+        s.board.set(p.classId, entries)
       }
-      return delay({ attemptNo, remaining: event.maxAttempts - attemptNo })
+      let isNewBest = false
+      if (isBetter(metrics, mine.bests[slot])) {
+        mine.bests[slot] = { attemptNo, timeSec: recordTimeSec(metrics)!, metrics }
+        mine.updatedAt = now()
+        isNewBest = true
+      }
+      return delay({
+        slot,
+        attemptNo,
+        remaining: event.attemptsPerChallenge - attemptNo,
+        isNewBest,
+        bestTimeSec: mine.bests[slot]?.timeSec ?? null,
+      })
     },
 
     async getLeaderboard(joinCode, opts) {
       const info = findClassByCode(joinCode)
       const entries = (s.board.get(info.classInfo.id) ?? [])
         .filter((e) => (opts?.includePending ? e.status !== 'rejected' : e.status === 'approved'))
-        .sort((a, b) => compareEntries(a, b, info.event.scoringVersion))
-      const rows: LeaderboardRow[] = entries.map((e, i) => ({
-        rank: i + 1,
-        publicId: e.publicId,
-        name: e.name,
-        status: e.status,
-        score: computeScore(e.metrics, info.event.scoringVersion),
-        metrics: e.metrics,
-        attemptsUsed: (s.attempts.get(e.participantId) ?? []).length,
-      }))
-      // 미제출 참가자 (rank null)
+        .sort(compareEntries)
+      const ranked = entries.filter((e) => averageSec(e.bests) !== null)
+      const rows: LeaderboardRow[] = entries.map((e) => {
+        const avg = averageSec(e.bests)
+        return {
+          rank: avg === null ? null : ranked.indexOf(e) + 1,
+          publicId: e.publicId,
+          name: e.name,
+          status: e.status,
+          bests: Object.fromEntries(
+            Object.entries(e.bests).map(([k, v]) => [k, v!.timeSec]),
+          ) as Partial<Record<ChallengeSlot, number>>,
+          averageSec: avg,
+          attemptsUsed: usedBySlot(e.participantId),
+        }
+      })
+      // 미제출 참가자
       s.participants
         .filter((p) => p.classId === info.classInfo.id)
         .filter((p) => (opts?.includePending ? p.status !== 'rejected' : p.status === 'approved'))
@@ -236,12 +278,23 @@ export function createMockApi(): CompetitionApi {
             publicId: p.publicId,
             name: p.name,
             status: p.status,
-            score: null,
-            metrics: null,
-            attemptsUsed: (s.attempts.get(p.id) ?? []).length,
+            bests: {},
+            averageSec: null,
+            attemptsUsed: usedBySlot(p.id),
           }),
         )
       return delay(rows)
+    },
+
+    async getMyProgress(p: ParticipantPath) {
+      const entries = s.board.get(p.classId) ?? []
+      const mine = entries.find((e) => e.participantId === p.participantId)
+      return delay({
+        attemptsUsed: usedBySlot(p.participantId),
+        bests: Object.fromEntries(
+          Object.entries(mine?.bests ?? {}).map(([k, v]) => [k, v!.timeSec]),
+        ) as Partial<Record<ChallengeSlot, number>>,
+      })
     },
 
     async validateTeacherCode(code) {
@@ -262,7 +315,7 @@ export function createMockApi(): CompetitionApi {
     },
 
     async listMySchools() {
-      requireRole(['teacher', 'organizer', 'admin'])
+      requireRole(['teacher', 'admin', 'master'])
       const views: TeacherSchoolView[] = s.mySchoolIds.map((id) => {
         const school = s.schools.find((x) => x.id === id)!
         return {
@@ -275,24 +328,23 @@ export function createMockApi(): CompetitionApi {
     },
 
     async listParticipants(c: ClassPath) {
-      requireRole(['teacher', 'organizer', 'admin'])
+      requireRole(['teacher', 'admin', 'master'])
       return delay(s.participants.filter((p) => p.classId === c.classId))
     },
 
     async setParticipantStatus(p: ParticipantPath, status: ParticipantStatus) {
-      requireRole(['teacher', 'organizer', 'admin'])
+      requireRole(['teacher', 'admin', 'master'])
       const target = s.participants.find((x) => x.id === p.participantId)
       if (!target) throw new Error('PARTICIPANT_NOT_FOUND')
       target.status = status
       target.statusHistory.push({ status, at: now(), by: s.myRole!.uid })
-      const entries = s.board.get(p.classId) ?? []
-      const e = entries.find((x) => x.participantId === p.participantId)
+      const e = (s.board.get(p.classId) ?? []).find((x) => x.participantId === p.participantId)
       if (e) e.status = status
       return delay(undefined)
     },
 
     async bulkApprove(c: ClassPath) {
-      requireRole(['teacher', 'organizer', 'admin'])
+      requireRole(['teacher', 'admin', 'master'])
       const targets = s.participants.filter((p) => p.classId === c.classId && p.status === 'pending')
       targets.forEach((t) => {
         t.status = 'approved'
@@ -304,20 +356,27 @@ export function createMockApi(): CompetitionApi {
     },
 
     async listEvents() {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       return delay([...s.events])
     },
 
     async createEvent(input) {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       const event: EventDoc = {
         id: `evt-${Math.random().toString(36).slice(2, 8)}`,
         name: input.name,
         startsAt: input.startsAt,
         endsAt: input.endsAt,
-        maxAttempts: input.maxAttempts ?? 3,
+        challenges:
+          input.challenges ??
+          [
+            { slot: 'c1', missionId: 201, name: 'Challenge 1' },
+            { slot: 'c2', missionId: 202, name: 'Challenge 2' },
+            { slot: 'c3', missionId: 203, name: 'Challenge 3' },
+          ],
+        attemptsPerChallenge: input.attemptsPerChallenge ?? 3,
         visibility: 'code-only',
-        scoringVersion: 'v1',
+        scoringVersion: 'v2',
         frozen: false,
         createdAt: now(),
       }
@@ -326,7 +385,7 @@ export function createMockApi(): CompetitionApi {
     },
 
     async updateEvent(eventId, patch) {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       const e = s.events.find((x) => x.id === eventId)
       if (!e) throw new Error('EVENT_NOT_FOUND')
       Object.assign(e, patch)
@@ -334,7 +393,7 @@ export function createMockApi(): CompetitionApi {
     },
 
     async importSchools(eventId, rows: ImportRow[]) {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       const schools: SchoolDoc[] = []
       const classes: ClassDoc[] = []
       const skipped: { row: ImportRow; reason: string }[] = []
@@ -376,7 +435,7 @@ export function createMockApi(): CompetitionApi {
     },
 
     async listEventSchools(eventId) {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       return delay(
         s.schools
           .filter((x) => x.eventId === eventId)
@@ -398,7 +457,7 @@ export function createMockApi(): CompetitionApi {
     },
 
     async resetTeacherCode(sp: SchoolPath) {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       const school = s.schools.find((x) => x.id === sp.schoolId)
       if (!school) throw new Error('SCHOOL_NOT_FOUND')
       school.teacherCode = newTeacherCode()
@@ -406,7 +465,7 @@ export function createMockApi(): CompetitionApi {
     },
 
     async getEventStats(eventId) {
-      requireRole(['organizer', 'admin'])
+      requireRole(['admin', 'master'])
       const event = s.events.find((x) => x.id === eventId)
       if (!event) throw new Error('EVENT_NOT_FOUND')
       const classes = s.classes.filter((x) => x.eventId === eventId)
@@ -420,28 +479,28 @@ export function createMockApi(): CompetitionApi {
       })
     },
 
-    async createOrganizerInvite() {
-      requireRole(['admin'])
+    async createAdminInvite() {
+      requireRole(['master'])
       const code = newInviteCode()
       s.invites.add(code)
       return delay(code)
     },
 
-    async redeemOrganizerInvite(code) {
+    async redeemAdminInvite(code) {
       const c = normalizeCode(code)
       if (!s.invites.has(c)) throw new Error('INVITE_NOT_FOUND')
       s.invites.delete(c)
-      s.myRole = { uid: s.myRole?.uid ?? uid(), role: 'organizer', inviteCode: c, createdAt: now() }
+      s.myRole = { uid: s.myRole?.uid ?? uid(), role: 'admin', inviteCode: c, createdAt: now() }
       return delay(undefined)
     },
 
     async listRoles() {
-      requireRole(['admin'])
+      requireRole(['master'])
       return delay(s.myRole ? [s.myRole] : [])
     },
 
     async revokeRole(uidToRevoke) {
-      requireRole(['admin'])
+      requireRole(['master'])
       if (s.myRole?.uid === uidToRevoke) s.myRole = null
       return delay(undefined)
     },
@@ -454,6 +513,6 @@ export function createMockApi(): CompetitionApi {
 
 declare global {
   interface Window {
-    __mockRole?: (role: 'teacher' | 'organizer' | 'admin' | null) => void
+    __mockRole?: (role: 'teacher' | 'admin' | 'master' | null) => void
   }
 }

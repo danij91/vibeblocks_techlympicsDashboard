@@ -1,12 +1,24 @@
 // ============================================================
-// vb-116 도메인 타입 — 단일 진실원. 변경은 Claude 승인 경유 (CONTRACT.md §0)
+// vb-116 도메인 타입 v2 — 단일 진실원. 변경은 Claude 승인 경유 (CONTRACT.md §0)
+// v2 (2026-06-11): 역할 재정립(teacher/admin/master) + 3도전·시간 랭킹
 // Firestore 저장 시 *At 필드는 Timestamp, api 경계에서는 ISO string.
 // ============================================================
 
-export type Role = 'teacher' | 'organizer' | 'admin'
+// teacher=교사 / admin=주최측 / master=회사(희용·HQ)
+export type Role = 'teacher' | 'admin' | 'master'
 export type ParticipantStatus = 'pending' | 'approved' | 'rejected' // 가등록/등록/거절
 export type Visibility = 'code-only' | 'public-masked' | 'public' // v1 = code-only 고정
 export type SolveMode = 'ai' | 'block'
+
+// 도전 슬롯 — 이벤트당 3개 고정 (rules가 슬롯별 시도 상한을 물리 강제)
+export type ChallengeSlot = 'c1' | 'c2' | 'c3'
+export const CHALLENGE_SLOTS: ChallengeSlot[] = ['c1', 'c2', 'c3']
+
+export interface ChallengeDef {
+  slot: ChallengeSlot
+  missionId: number // 앱 TECHLYMPICS_MISSIONS taskGroupId (201/202/203)
+  name: string
+}
 
 // ---------- 경로 (Firestore 중첩 문서 참조용) ----------
 export interface SchoolPath {
@@ -26,9 +38,10 @@ export interface EventDoc {
   name: string
   startsAt: string
   endsAt: string
-  maxAttempts: number // 기본 3
+  challenges: ChallengeDef[] // 3개 고정
+  attemptsPerChallenge: number // 기본 3 — 도전당 공식 시도
   visibility: Visibility
-  scoringVersion: string // 'v1'
+  scoringVersion: string // 'v2' = 시간 기반 (최고기록·평균 오름차순)
   frozen: boolean // true = 마감 동결 (제출 차단)
   createdAt: string
 }
@@ -73,33 +86,38 @@ export interface ParticipantDoc {
   statusHistory: StatusChange[]
 }
 
-// PROVISIONAL — 측정 항목은 Monday 확정 전. 필드 추가 허용(맵 그대로 저장).
+// PROVISIONAL — 시뮬 측정 raw. v2 유효 기록 = successRate 1 && averageTimeSec != null
 export interface AttemptMetrics {
-  missionId: string
+  missionId: number
   environment: string
   solveMode: SolveMode
   successRate: number // 0..1
-  averageTimeSec: number | null // 1회 이상 실패 시 null
-  stars: number // 0..5
+  averageTimeSec: number | null // 기록 시간(초). 실패 런 = null
+  stars: number // 0..5 (참고 표시용 — v2 랭킹엔 미사용, raw 보존)
   blockCount: number
 }
 
 export interface AttemptDoc {
-  id: string // `${participantId}_${attemptNo}` — create-only로 시도 상한 강제
-  attemptNo: number // 1..event.maxAttempts
+  id: string // `${participantId}_${slot}_${attemptNo}` — create-only로 슬롯별 상한 강제
+  slot: ChallengeSlot
+  attemptNo: number // 1..event.attemptsPerChallenge
   metrics: AttemptMetrics
   submittedAt: string
 }
 
-// 학급 리더보드 비정규화 entry — classes/{classId}/board/{participantId}
-// rules가 metrics == 해당 attempt 원본 일치를 강제 (위변조 방지, CONTRACT §4)
+// 도전별 최고기록 (board 비정규화 — rules가 attempt 원본과 일치 강제)
+export interface BoardBest {
+  attemptNo: number
+  timeSec: number // 유효 기록 시간 (= metrics.averageTimeSec, 성공 런만)
+  metrics: AttemptMetrics
+}
+
 export interface BoardEntryDoc {
   participantId: string
   publicId: string
   name: string
   status: ParticipantStatus
-  bestAttemptNo: number
-  metrics: AttemptMetrics
+  bests: Partial<Record<ChallengeSlot, BoardBest>>
   updatedAt: string
 }
 
@@ -107,7 +125,7 @@ export interface RoleDoc {
   uid: string
   role: Role
   email?: string
-  inviteCode?: string // organizer 초대코드 redeem 시
+  inviteCode?: string // admin(주최측) 초대코드 redeem 시
   createdAt: string
 }
 
@@ -129,18 +147,21 @@ export interface ResumeResult extends JoinInfo {
 }
 
 export interface SubmitResult {
+  slot: ChallengeSlot
   attemptNo: number
-  remaining: number
+  remaining: number // 해당 슬롯 잔여 시도
+  isNewBest: boolean
+  bestTimeSec: number | null // 해당 슬롯 현재 최고기록
 }
 
 export interface LeaderboardRow {
-  rank: number | null // 미제출 = null
+  rank: number | null // 3개 도전 모두 유효 기록 있어야 순위 — 아니면 null(하단 표시)
   publicId: string
   name: string
   status: ParticipantStatus
-  score: number | null // computeScore(metrics) — 표시 시점 계산
-  metrics: AttemptMetrics | null
-  attemptsUsed: number
+  bests: Partial<Record<ChallengeSlot, number>> // 도전별 최고기록(초)
+  averageSec: number | null // 3개 평균 — 정렬 기준 (오름차순)
+  attemptsUsed: Record<ChallengeSlot, number>
 }
 
 export interface TeacherSchoolView {
@@ -157,7 +178,7 @@ export interface ImportRow {
 }
 
 export interface ImportResult {
-  schools: SchoolDoc[] // 신규+기존 매칭 포함
+  schools: SchoolDoc[]
   classes: ClassDoc[]
   skipped: { row: ImportRow; reason: string }[]
 }

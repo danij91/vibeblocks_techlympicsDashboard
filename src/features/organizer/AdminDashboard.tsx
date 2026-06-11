@@ -20,7 +20,7 @@ export default function AdminDashboard() {
     try {
       const current = await api.getMyRole()
       setRole(current)
-      if (current?.role === 'admin') setRoles(await api.listRoles())
+      if (current?.role === 'master') setRoles(await api.listRoles())
       else setRoles([])
     } catch (err) {
       setError(getErrorMessage(err))
@@ -34,7 +34,7 @@ export default function AdminDashboard() {
   const createInvite = async () => {
     setError('')
     try {
-      const code = await api.createOrganizerInvite()
+      const code = await api.createAdminInvite()
       setInvite(code)
       setNotice('Organizer invite created.')
       await refresh()
@@ -52,7 +52,7 @@ export default function AdminDashboard() {
   const redeem = async (code = redeemCode) => {
     setError('')
     try {
-      await api.redeemOrganizerInvite(code)
+      await api.redeemAdminInvite(code)
       setRedeemCode('')
       setNotice('Invite redeemed. Current user is now organizer.')
       await refresh()
@@ -83,7 +83,7 @@ export default function AdminDashboard() {
           <p className="ops-subtle">Create organizer invites, redeem invites, and manage assigned roles.</p>
         </div>
         <div className="ops-row-actions">
-          <button className="ops-button" onClick={() => { window.__mockRole?.('admin'); void refresh() }}>Mock admin</button>
+          <button className="ops-button" onClick={() => { window.__mockRole?.('master'); void refresh() }}>Mock admin</button>
           <button className="ops-button" onClick={() => { window.__mockRole?.(null); void refresh() }}>Clear mock role</button>
           <button className="ops-button" onClick={() => void refresh()}>Refresh</button>
         </div>
@@ -114,7 +114,7 @@ export default function AdminDashboard() {
         </section>
 
         <section className="ops-stack">
-          {role?.role === 'admin' ? (
+          {role?.role === 'master' ? (
             <>
               <div className="ops-panel">
                 <div className="ops-topbar">
