@@ -35,6 +35,71 @@ service cloud.firestore {
       let e = eventData(eventId);
       return !e.frozen && request.time < e.endsAt;
     }
+    function timestampField(name) {
+      return request.resource.data[name] is timestamp;
+    }
+    function mappingKeys() {
+      return ['eventId', 'schoolId', 'classId', 'participantId', 'createdAt'];
+    }
+    function validRecoveryMapping(hash) {
+      let data = request.resource.data;
+      let participantPath = /databases/$(database)/documents/events/$(data.eventId)/schools/$(data.schoolId)/classes/$(data.classId)/participants/$(data.participantId);
+      return request.resource.data.keys().hasOnly(mappingKeys())
+        && timestampField('createdAt')
+        && existsAfter(participantPath)
+        && getAfter(participantPath).data.ownerUid == request.auth.uid
+        && getAfter(participantPath).data.recoveryHash == hash;
+    }
+    function validParticipantCreate(eventId, schoolId, classId, participantId) {
+      return request.resource.data.keys().hasOnly([
+          'id', 'eventId', 'schoolId', 'classId', 'name', 'grade', 'publicId',
+          'status', 'ownerUid', 'recoveryHash', 'registeredAt', 'statusHistory'
+        ])
+        && request.resource.data.id == participantId
+        && request.resource.data.eventId == eventId
+        && request.resource.data.schoolId == schoolId
+        && request.resource.data.classId == classId
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.statusHistory == []
+        && timestampField('registeredAt')
+        && eventOpen(eventId);
+    }
+    function validAttemptCreate(eventId, schoolId, classId, participantId, attemptId) {
+      let participant = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data;
+      return request.resource.data.keys().hasOnly(['attemptNo', 'metrics', 'submittedAt'])
+        && participant.ownerUid == request.auth.uid
+        && participant.status != 'rejected'
+        && attemptId == participantId + '_' + string(request.resource.data.attemptNo)
+        && request.resource.data.attemptNo >= 1
+        && request.resource.data.attemptNo <= eventData(eventId).maxAttempts
+        && timestampField('submittedAt')
+        && eventOpen(eventId);
+    }
+    function validBoardWrite(eventId, schoolId, classId, participantId) {
+      let participant = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data;
+      let attempt = get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)/attempts/$(participantId + '_' + string(request.resource.data.bestAttemptNo))).data;
+      return request.resource.data.keys().hasOnly([
+          'participantId', 'publicId', 'name', 'status', 'bestAttemptNo', 'metrics', 'updatedAt'
+        ])
+        && participant.ownerUid == request.auth.uid
+        && request.resource.data.participantId == participantId
+        && request.resource.data.publicId == participant.publicId
+        && request.resource.data.name == participant.name
+        && request.resource.data.status == participant.status
+        && request.resource.data.metrics == attempt.metrics
+        && timestampField('updatedAt');
+    }
+    function validTeacherStatusBoardUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status in ['pending', 'approved', 'rejected'];
+    }
+    function validTeacherParticipantStatusUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusHistory'])
+        && request.resource.data.status in ['pending', 'approved', 'rejected']
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.recoveryHash == resource.data.recoveryHash;
+    }
 
     // ---------- capability 매핑 (경로 = 비밀. get만, list 금지) ----------
     match /joinCodes/{code} {
@@ -50,15 +115,16 @@ service cloud.firestore {
     match /recoveryCodes/{hash} {
       allow get: if true;
       allow list: if false;
-      // joinClass 시 학생이 자기 participant와 함께 생성
-      // TODO(vb-116-api-rules): 매핑이 본인 participant를 가리키는지 get()으로 검증
-      allow create: if authed();
+      // joinClass 시 학생이 자기 participant와 같은 batch에서 생성.
+      allow create: if authed() && validRecoveryMapping(hash);
       allow update, delete: if false;
       // 기기 재바인딩 증명: 코드(=경로)를 아는 클라이언트만 claim 생성 가능
       match /claims/{uid} {
         allow get: if authed() && uid == request.auth.uid;
         allow list: if false;
-        allow create: if authed() && uid == request.auth.uid;
+        allow create: if authed() && uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['claimedAt'])
+          && timestampField('claimedAt');
         allow update, delete: if false;
       }
     }
@@ -67,10 +133,15 @@ service cloud.firestore {
     match /organizerInvites/{code} {
       allow get: if authed();
       allow list: if isAdmin();
-      allow create, delete: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['createdBy', 'usedBy', 'createdAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.usedBy == null
+        && timestampField('createdAt');
+      allow delete: if isAdmin();
       // redeem 마킹 (usedBy 1회 기록)
-      // TODO(vb-116-api-rules): usedBy null→uid 전이만 허용으로 조이기
       allow update: if authed() && resource.data.usedBy == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedBy'])
         && request.resource.data.usedBy == request.auth.uid;
     }
     match /roles/{uid} {
@@ -80,8 +151,15 @@ service cloud.firestore {
       allow create: if isAdmin()
         || (authed() && uid == request.auth.uid
             && request.resource.data.role == 'organizer'
-            && exists(/databases/$(database)/documents/organizerInvites/$(request.resource.data.inviteCode)));
-      allow update: if isAdmin();
+            && getAfter(/databases/$(database)/documents/organizerInvites/$(request.resource.data.inviteCode)).data.usedBy == request.auth.uid)
+        || (authed() && uid == request.auth.uid
+            && request.resource.data.role == 'teacher'
+            && getAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId)/schools/$(request.resource.data.schoolId)/teachers/$(request.auth.uid)).data.code
+               == request.resource.data.code);
+      allow update: if isAdmin()
+        || (authed() && uid == request.auth.uid
+            && resource.data.role == 'teacher'
+            && request.resource.data.role == 'teacher');
       allow delete: if isAdmin();
     }
 
@@ -103,8 +181,10 @@ service cloud.firestore {
           allow get: if authed() && (uid == request.auth.uid || isOrganizer());
           allow list: if isOrganizer();
           allow create: if authed() && uid == request.auth.uid
+            && request.resource.data.keys().hasOnly(['code', 'boundAt'])
             && request.resource.data.code
-               == get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)).data.teacherCode;
+               == get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)).data.teacherCode
+            && timestampField('boundAt');
           allow update: if false;
           allow delete: if isOrganizer();
         }
@@ -119,10 +199,9 @@ service cloud.firestore {
           match /board/{participantId} {
             allow get, list: if true;
             // 본인 entry만 + metrics가 실제 attempt 원본과 일치할 때만 (위변조 차단)
-            allow create, update: if authed()
-              && get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
-              && request.resource.data.metrics
-                 == get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)/attempts/$(participantId + '_' + string(request.resource.data.bestAttemptNo))).data.metrics;
+            allow create: if authed() && validBoardWrite(eventId, schoolId, classId, participantId);
+            allow update: if (authed() && validBoardWrite(eventId, schoolId, classId, participantId))
+              || ((isSchoolTeacher(eventId, schoolId) || isOrganizer()) && validTeacherStatusBoardUpdate());
             allow delete: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
           }
 
@@ -132,12 +211,9 @@ service cloud.firestore {
                   || isSchoolTeacher(eventId, schoolId) || isOrganizer());
             allow list: if isSchoolTeacher(eventId, schoolId) || isOrganizer();
             // 학생 등록: 본인 uid, pending 시작, 행사 열림
-            allow create: if authed()
-              && request.resource.data.ownerUid == request.auth.uid
-              && request.resource.data.status == 'pending'
-              && eventOpen(eventId);
+            allow create: if authed() && validParticipantCreate(eventId, schoolId, classId, participantId);
             // 교사/주최측: 상태 전환 등 | 학생 본인: ownerUid 재바인딩만 (recovery claim 증명)
-            allow update: if (isSchoolTeacher(eventId, schoolId) || isOrganizer())
+            allow update: if ((isSchoolTeacher(eventId, schoolId) || isOrganizer()) && validTeacherParticipantStatusUpdate())
               || (authed()
                   && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerUid'])
                   && request.resource.data.ownerUid == request.auth.uid
@@ -149,13 +225,7 @@ service cloud.firestore {
               allow get, list: if authed()
                 && (get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
                     || isSchoolTeacher(eventId, schoolId) || isOrganizer());
-              allow create: if authed()
-                && get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.ownerUid == request.auth.uid
-                && get(/databases/$(database)/documents/events/$(eventId)/schools/$(schoolId)/classes/$(classId)/participants/$(participantId)).data.status != 'rejected'
-                && attemptId == participantId + '_' + string(request.resource.data.attemptNo)
-                && request.resource.data.attemptNo >= 1
-                && request.resource.data.attemptNo <= eventData(eventId).maxAttempts
-                && eventOpen(eventId);
+              allow create: if authed() && validAttemptCreate(eventId, schoolId, classId, participantId, attemptId);
               allow update, delete: if false;
             }
           }
