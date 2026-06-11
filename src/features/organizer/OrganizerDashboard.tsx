@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import * as XLSX from 'xlsx'
 import { api } from '../../api'
-import type { EventDoc, EventStats, ImportResult, ImportRow, OrganizerSchoolView, RoleDoc } from '../../api/types'
+import type { EventDoc, EventStats, ImportResult, ImportRow, OrganizerSchoolView } from '../../api/types'
 import { sampleImportRows } from './fixtures/sampleImportRows'
 import './organizer.css'
 
@@ -144,54 +144,8 @@ function downloadResultWorkbook(rows: PreviewRow[], schools: OrganizerSchoolView
   XLSX.writeFile(workbook, 'techlympics-import-result.xlsx')
 }
 
-function RoleGate({ children }: { children: React.ReactNode }) {
-  const [role, setRole] = useState<RoleDoc | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  const refresh = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      setRole(await api.getMyRole())
-    } catch (err) {
-      setError(getErrorMessage(err))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    void refresh()
-  }, [])
-
-  if (loading) return <main className="ops-shell">Loading organizer access...</main>
-  if (error) return <main className="ops-shell"><div className="ops-alert">{error}</div></main>
-  if (role?.role !== 'admin' && role?.role !== 'master') {
-    return (
-      <main className="ops-shell">
-        <div className="ops-panel">
-          <p className="ops-eyebrow">Access required</p>
-          <h1>Organizer workspace</h1>
-          <p className="ops-subtle">This area requires an organizer or admin role.</p>
-          <div className="ops-row-actions">
-            <button className="ops-button primary" onClick={() => { window.__mockRole?.('admin'); void refresh() }}>Mock organizer</button>
-            <button className="ops-button" onClick={() => { window.__mockRole?.('master'); void refresh() }}>Mock admin</button>
-          </div>
-        </div>
-      </main>
-    )
-  }
-
-  return <>{children}</>
-}
-
 export default function OrganizerDashboard() {
-  return (
-    <RoleGate>
-      <OrganizerWorkspace />
-    </RoleGate>
-  )
+  return <OrganizerWorkspace />
 }
 
 function OrganizerWorkspace() {
@@ -234,11 +188,11 @@ function OrganizerWorkspace() {
   }
 
   return (
-    <main className="ops-shell">
+    <section className="ops-workspace">
       <div className="ops-topbar">
         <div>
-          <p className="ops-eyebrow">Techlympics operations</p>
-          <h1>Organizer Console</h1>
+          <p className="ops-eyebrow">Techlympics admin</p>
+          <h1>Admin Console</h1>
           <p className="ops-subtle">Manage events, school imports, codes, and class notices.</p>
         </div>
         <button className="ops-button" onClick={() => void refresh()}>Refresh</button>
@@ -292,7 +246,7 @@ function OrganizerWorkspace() {
           {tab === 'print' && <PrintPanel schools={schools} onPrint={printNotices} />}
         </section>
       </div>
-    </main>
+    </section>
   )
 }
 

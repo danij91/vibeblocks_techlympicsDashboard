@@ -11,7 +11,6 @@ export default function AdminDashboard() {
   const [role, setRole] = useState<RoleDoc | null>(null)
   const [roles, setRoles] = useState<RoleDoc[]>([])
   const [invite, setInvite] = useState('')
-  const [redeemCode, setRedeemCode] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
@@ -36,7 +35,7 @@ export default function AdminDashboard() {
     try {
       const code = await api.createAdminInvite()
       setInvite(code)
-      setNotice('Organizer invite created.')
+      setNotice('Admin invite created.')
       await refresh()
     } catch (err) {
       setError(getErrorMessage(err))
@@ -47,18 +46,6 @@ export default function AdminDashboard() {
     if (!invite) return
     await navigator.clipboard.writeText(invite)
     setNotice('Invite code copied.')
-  }
-
-  const redeem = async (code = redeemCode) => {
-    setError('')
-    try {
-      await api.redeemAdminInvite(code)
-      setRedeemCode('')
-      setNotice('Invite redeemed. Current user is now organizer.')
-      await refresh()
-    } catch (err) {
-      setError(getErrorMessage(err))
-    }
   }
 
   const revoke = async (uid: string) => {
@@ -75,16 +62,14 @@ export default function AdminDashboard() {
   }
 
   return (
-    <main className="ops-shell">
+    <section className="ops-workspace">
       <div className="ops-topbar">
         <div>
-          <p className="ops-eyebrow">Techlympics access</p>
-          <h1>Admin Console</h1>
-          <p className="ops-subtle">Create organizer invites, redeem invites, and manage assigned roles.</p>
+          <p className="ops-eyebrow">Techlympics HQ</p>
+          <h1>Master/HQ Console</h1>
+          <p className="ops-subtle">Create admin invites and manage assigned roles.</p>
         </div>
         <div className="ops-row-actions">
-          <button className="ops-button" onClick={() => { window.__mockRole?.('master'); void refresh() }}>Mock admin</button>
-          <button className="ops-button" onClick={() => { window.__mockRole?.(null); void refresh() }}>Clear mock role</button>
           <button className="ops-button" onClick={() => void refresh()}>Refresh</button>
         </div>
       </div>
@@ -94,15 +79,6 @@ export default function AdminDashboard() {
 
       <div className="ops-grid">
         <section className="ops-stack">
-          <div className="ops-panel">
-            <h2>Redeem organizer invite</h2>
-            <p className="ops-subtle">Organizer candidates can enter a V-code here after login.</p>
-            <div className="ops-form" style={{ marginTop: 10 }}>
-              <label className="ops-label">Invite code<input className="ops-input" value={redeemCode} onChange={(e) => setRedeemCode(e.target.value)} placeholder="V-..." /></label>
-              <button className="ops-button primary" disabled={!redeemCode.trim()} onClick={() => void redeem()}>Redeem invite</button>
-            </div>
-          </div>
-
           <div className="ops-panel">
             <h2>Current role</h2>
             {role ? (
@@ -119,8 +95,8 @@ export default function AdminDashboard() {
               <div className="ops-panel">
                 <div className="ops-topbar">
                   <div>
-                    <h2>Organizer invite</h2>
-                    <p className="ops-subtle">Issue one-time invite codes for organizer accounts.</p>
+                    <h2>Admin invite</h2>
+                    <p className="ops-subtle">Issue one-time invite codes for host admin accounts.</p>
                   </div>
                   <button className="ops-button primary" onClick={() => void createInvite()}>Create invite</button>
                 </div>
@@ -130,7 +106,6 @@ export default function AdminDashboard() {
                     <h3><code>{invite}</code></h3>
                     <div className="ops-row-actions" style={{ marginTop: 8 }}>
                       <button className="ops-button" onClick={() => void copyInvite()}>Copy</button>
-                      <button className="ops-button" onClick={() => void redeem(invite)}>Redeem in this session</button>
                     </div>
                   </div>
                 )}
@@ -159,13 +134,13 @@ export default function AdminDashboard() {
             </>
           ) : (
             <div className="ops-panel">
-              <p className="ops-eyebrow">Admin required</p>
+              <p className="ops-eyebrow">Master required</p>
               <h2>Role management is locked</h2>
-              <p className="ops-subtle">Use an admin role to create invites and revoke roles.</p>
+              <p className="ops-subtle">Use a master role to create invites and revoke roles.</p>
             </div>
           )}
         </section>
       </div>
-    </main>
+    </section>
   )
 }
