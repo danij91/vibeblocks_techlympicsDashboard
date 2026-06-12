@@ -10,3 +10,14 @@ body {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* vb-responsive-baseline (v5) — 모바일 가로 오버플로 = "확대된 느낌"의 근원 차단 */
+html, body { overflow-x: hidden; }
+main { max-width: 1200px; margin-inline: auto; width: 100%; }
+table { width: 100%; }
+.table-scroll, main :where(div):has(> table) { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+img, svg, canvas { max-width: 100%; height: auto; }
+input, select, button, textarea { font-size: max(16px, 1em); } /* iOS 자동 줌 방지 */
+@media (max-width: 480px) {
+  main { padding-left: 12px; padding-right: 12px; }
+}

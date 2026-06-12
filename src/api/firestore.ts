@@ -662,6 +662,21 @@ export function createFirestoreApi(): CompetitionApi {
         if (!roleSnap.exists()) throw new Error('FORBIDDEN')
         const role = roleSnap.data() as RoleWithSchools
         const paths = role.schoolPaths ?? (role.eventId && role.schoolId ? [{ eventId: role.eventId, schoolId: role.schoolId }] : [])
+        // v5: 기존 바인딩 email 백필 (best-effort — 실패해도 콘솔 동작에 영향 없음)
+        const myEmail = auth.currentUser?.email
+        if (myEmail) {
+          void Promise.all(
+            paths.map(async (path) => {
+              try {
+                const bindingRef = doc(db, 'events', path.eventId, 'schools', path.schoolId, 'teachers', uid)
+                const snap = await getDoc(bindingRef)
+                if (snap.exists() && !snap.data().email) await updateDoc(bindingRef, { email: myEmail })
+              } catch {
+                /* rules 거부 등 — 무시 */
+              }
+            }),
+          )
+        }
         const views: TeacherSchoolView[] = await Promise.all(
           paths.map(async (path) => {
             const [eventSnap, school] = await Promise.all([getDoc(eventRef(path.eventId)), readFullSchool(path)])
