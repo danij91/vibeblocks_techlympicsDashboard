@@ -215,7 +215,7 @@ function gradeFromClassName(className: string) {
   return className.trim().match(/^(\d+)/)?.[1] ?? '-'
 }
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ embedded = false }: { embedded?: boolean }) {
   const toast = useToast()
   const [tab, setTab] = useState<AdminTab>('events')
   const [events, setEvents] = useState<EventDoc[]>([])
@@ -258,7 +258,7 @@ export default function AdminDashboard() {
   }, [])
 
   return (
-    <section className="ops-workspace">
+    <section className={embedded ? 'ops-workspace embedded' : 'ops-workspace'}>
       <div className="ops-topbar">
         <div>
           <p className="ops-eyebrow">Techlympics admin</p>
@@ -1071,7 +1071,7 @@ function SchoolsPanel({
                   </tr>
                   {isExpanded && (
                     <tr>
-                      <td colSpan={7}>
+                      <td className="ops-expanded-cell" colSpan={7}>
                         <AddClassPanel
                           busy={addingClassSchoolId === schoolId}
                           schoolName={school.school.name}
@@ -1265,7 +1265,7 @@ function ClassList({
                 </tr>
                 {classExpanded && (
                   <tr>
-                    <td colSpan={6}>
+                    <td className="ops-expanded-cell" colSpan={6}>
                       <ParticipantTable
                         classStats={classStats}
                         loading={loadingParticipantsKey === key}
@@ -1276,7 +1276,7 @@ function ClassList({
                 )}
                 {rankingKey === key && (
                   <tr>
-                    <td colSpan={6}>
+                    <td className="ops-expanded-cell" colSpan={6}>
                       <LeaderboardTable event={event} rows={rankingRows} />
                     </td>
                   </tr>
