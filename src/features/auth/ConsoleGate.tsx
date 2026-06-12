@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import { Navigate } from 'react-router-dom'
 import { api } from '../../api'
 import type { Role, RoleDoc } from '../../api/types'
 import AuthHeader from './AuthHeader'
-import AuthPanel from './AuthPanel'
 import RoleLanding from './RoleLanding'
 import { useAuthSession } from './session'
 import './auth.css'
@@ -59,11 +59,7 @@ export default function ConsoleGate({
   }
 
   if (!isSignedIn) {
-    return (
-      <section className="auth-stack">
-        <AuthPanel title={`Sign in for ${label}`} onSignedIn={refreshRole} />
-      </section>
-    )
+    return <Navigate to="/" replace />
   }
 
   if (error) {

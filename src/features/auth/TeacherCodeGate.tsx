@@ -2,8 +2,9 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { User } from 'firebase/auth'
 import { api } from '../../api'
-import { normalizeCode } from '../../api/codes'
+import { classifyCode, normalizeCode } from '../../api/codes'
 import type { EventDoc, SchoolDoc } from '../../api/types'
+import { useToast } from '../../lib/toast'
 import AuthPanel from './AuthPanel'
 import { isRealUser } from './session'
 
@@ -34,6 +35,7 @@ export default function TeacherCodeGate({
   const [validated, setValidated] = useState<ValidatedTeacherCode | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const toast = useToast()
 
   const validateCode = async (event: FormEvent) => {
     event.preventDefault()
@@ -41,28 +43,55 @@ export default function TeacherCodeGate({
     setError('')
     try {
       const normalized = normalizeCode(code)
+      const kind = classifyCode(normalized)
+      if (kind !== 'teacher') {
+        const message =
+          kind === 'join'
+            ? 'That is a class code. Teacher sign-up requires a teacher code that starts with T-.'
+            : kind === 'invite'
+              ? 'That is an admin invite. Sign in first, then redeem it from your account entry.'
+              : kind === 'recovery'
+                ? 'Recovery codes are used inside the VibeBlocks app.'
+                : 'Enter a teacher code that starts with T-.'
+        setError(message)
+        toast(message, 'error')
+        return
+      }
       const result = await api.validateTeacherCode(normalized)
       setValidated({ code: normalized, ...result })
       setStep('confirm')
+      toast('Teacher code confirmed.', 'success')
     } catch (err) {
-      setError(errorText(err))
+      const message = errorText(err)
+      setError(message)
+      toast(message, 'error')
     } finally {
       setBusy(false)
     }
   }
 
-  const bindValidatedSchool = async () => {
+  const bindValidatedSchool = async ({
+    bubbleError = false,
+    notifyError = true,
+  }: {
+    bubbleError?: boolean
+    notifyError?: boolean
+  } = {}) => {
     if (!validated) return
     setBusy(true)
     setError('')
     try {
       await api.bindTeacherSchool(validated.code)
       await onBound()
+      toast('Teacher access added.', 'success')
       setCode('')
       setValidated(null)
       setStep('code')
     } catch (err) {
-      setError(errorText(err))
+      const message = errorText(err)
+      setError(message)
+      if (notifyError) toast(message, 'error')
+      if (bubbleError) throw err
     } finally {
       setBusy(false)
     }
@@ -105,7 +134,7 @@ export default function TeacherCodeGate({
         <div className="auth-confirm">
           <p className="auth-eyebrow">{validated.event.name}</p>
           <h2>{validated.school.name}</h2>
-          <p>Confirm this school before adding it to your teacher account.</p>
+          <p>Confirm this teacher code before adding access to your account.</p>
           <div className="auth-actions">
             <button className="auth-button" type="button" onClick={() => setStep('code')} disabled={busy}>
               Change code
@@ -116,14 +145,20 @@ export default function TeacherCodeGate({
               </button>
             ) : (
               <button className="auth-button primary" type="button" onClick={() => setStep('auth')} disabled={busy}>
-                Continue to sign in
+                Create teacher account
               </button>
             )}
           </div>
         </div>
       ) : null}
 
-      {step === 'auth' ? <AuthPanel title="Sign in to bind teacher code" onSignedIn={bindValidatedSchool} /> : null}
+      {step === 'auth' ? (
+        <AuthPanel
+          title="Create teacher account"
+          mode="sign-up"
+          onSignedIn={() => bindValidatedSchool({ bubbleError: true, notifyError: false })}
+        />
+      ) : null}
       {error ? <div className="auth-alert">{error}</div> : null}
     </section>
   )

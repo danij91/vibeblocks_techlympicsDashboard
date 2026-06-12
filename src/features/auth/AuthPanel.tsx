@@ -7,6 +7,7 @@ import {
   signInWithPopup,
 } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
+import { useToast } from '../../lib/toast'
 
 type AuthMode = 'sign-in' | 'sign-up'
 
@@ -18,16 +19,21 @@ function errorText(error: unknown): string {
 
 export default function AuthPanel({
   title = 'Sign in',
+  mode,
   onSignedIn,
 }: {
   title?: string
+  mode?: AuthMode
   onSignedIn?: () => void | Promise<void>
 }) {
-  const [authMode, setAuthMode] = useState<AuthMode>('sign-in')
+  const [selectedMode, setSelectedMode] = useState<AuthMode>(mode ?? 'sign-in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const toast = useToast()
+  const authMode = mode ?? selectedMode
+  const isFixedMode = Boolean(mode)
 
   const finish = async () => {
     if (onSignedIn) await onSignedIn()
@@ -39,8 +45,11 @@ export default function AuthPanel({
     try {
       await signInWithPopup(auth, googleProvider)
       await finish()
+      toast(authMode === 'sign-up' ? 'Account ready.' : 'Signed in.', 'success')
     } catch (err) {
-      setError(errorText(err))
+      const message = errorText(err)
+      setError(message)
+      toast(message, 'error')
     } finally {
       setBusy(false)
     }
@@ -57,8 +66,11 @@ export default function AuthPanel({
         await signInWithEmailAndPassword(auth, email.trim(), password)
       }
       await finish()
+      toast(authMode === 'sign-up' ? 'Account created.' : 'Signed in.', 'success')
     } catch (err) {
-      setError(errorText(err))
+      const message = errorText(err)
+      setError(message)
+      toast(message, 'error')
     } finally {
       setBusy(false)
     }
@@ -70,16 +82,18 @@ export default function AuthPanel({
         <p className="auth-eyebrow">Account</p>
         <h2>{title}</h2>
       </div>
-      <div className="auth-segmented" role="group" aria-label="Authentication mode">
-        <button type="button" className={authMode === 'sign-in' ? 'active' : ''} onClick={() => setAuthMode('sign-in')}>
-          Sign in
-        </button>
-        <button type="button" className={authMode === 'sign-up' ? 'active' : ''} onClick={() => setAuthMode('sign-up')}>
-          Create account
-        </button>
-      </div>
+      {!isFixedMode ? (
+        <div className="auth-segmented" role="group" aria-label="Authentication mode">
+          <button type="button" className={authMode === 'sign-in' ? 'active' : ''} onClick={() => setSelectedMode('sign-in')}>
+            Sign in
+          </button>
+          <button type="button" className={authMode === 'sign-up' ? 'active' : ''} onClick={() => setSelectedMode('sign-up')}>
+            Create account
+          </button>
+        </div>
+      ) : null}
       <button className="auth-button google" type="button" onClick={signInWithGoogle} disabled={busy}>
-        Continue with Google
+        {authMode === 'sign-up' ? 'Create account with Google' : 'Continue with Google'}
       </button>
       <form className="auth-form" onSubmit={signInWithEmail}>
         <label>
