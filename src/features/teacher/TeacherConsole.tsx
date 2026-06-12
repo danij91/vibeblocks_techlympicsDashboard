@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { api } from '../../api'
 import type {
@@ -30,6 +30,8 @@ type ActiveClass = {
 type WorkspaceMode = 'participants' | 'ranking'
 type ClassViewMode = 'cards' | 'list'
 type GradeFilter = 'all' | `grade:${number}` | 'other'
+type TeacherRouteView = 'classes' | 'class' | 'ranking'
+type TeacherRouteModal = 'qr' | 'reset' | 'add-class'
 
 function classPath(classInfo: ClassDoc): ClassPath {
   return {
@@ -64,6 +66,27 @@ function gradeLabel(value: GradeFilter, t: TFunction): string {
   if (value === 'all') return t('common.all')
   if (value === 'other') return t('common.other')
   return t('teacher.gradeLabel', { grade: value.replace('grade:', '') })
+}
+
+function routeView(searchParams: URLSearchParams): TeacherRouteView {
+  const view = searchParams.get('view')
+  if (view === 'class' || view === 'ranking') return view
+  return 'classes'
+}
+
+function routeModal(searchParams: URLSearchParams): TeacherRouteModal | null {
+  const modal = searchParams.get('modal')
+  if (modal === 'qr' || modal === 'reset' || modal === 'add-class') return modal
+  return null
+}
+
+function findClassView(schools: TeacherSchoolView[], classId: string): ActiveClass | null {
+  if (!classId) return null
+  for (const school of schools) {
+    const classInfo = school.classes.find((item) => item.id === classId)
+    if (classInfo) return { school, classInfo }
+  }
+  return null
 }
 
 function formatDate(value: string): string {
@@ -110,6 +133,7 @@ async function copyText(value: string): Promise<void> {
 
 export default function TeacherConsole() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const toast = useToast()
   const t = useT()
   const { user, loading: authLoading, isSignedIn } = useAuthSession()
@@ -123,6 +147,44 @@ export default function TeacherConsole() {
   const [notice, setNotice] = useState('')
   const [showGate, setShowGate] = useState(false)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('participants')
+  const currentRouteView = routeView(searchParams)
+  const currentRouteModal = routeModal(searchParams)
+  const routeClassId = searchParams.get('class') ?? ''
+
+  const setTeacherRoute = useCallback(
+    (view: TeacherRouteView, classId: string, replace = false) => {
+      const next = new URLSearchParams(searchParams)
+      next.set('view', view)
+      if (classId) next.set('class', classId)
+      else next.delete('class')
+      next.delete('modal')
+      setSearchParams(next, { replace })
+    },
+    [searchParams, setSearchParams],
+  )
+
+  const openTeacherModal = useCallback(
+    (modal: TeacherRouteModal, classId = '') => {
+      const next = new URLSearchParams(searchParams)
+      if (!next.get('view')) next.set('view', currentRouteView)
+      if (classId) next.set('class', classId)
+      next.set('modal', modal)
+      setSearchParams(next, { replace: false })
+    },
+    [currentRouteView, searchParams, setSearchParams],
+  )
+
+  const closeTeacherModal = useCallback(() => {
+    if (!routeModal(searchParams)) return
+    const historyState = window.history.state as { idx?: number } | null
+    if (typeof historyState?.idx === 'number' && historyState.idx > 0) {
+      window.history.back()
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('modal')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
   const refreshRole = useCallback(async () => {
     if (!isSignedIn) {
@@ -185,6 +247,66 @@ export default function TeacherConsole() {
     return classInfo ? { school: activeSchool, classInfo } : null
   }, [activeSchool, selectedClassId])
 
+  useEffect(() => {
+    if (schools.length === 0) return
+    const queryClass = findClassView(schools, routeClassId)
+
+    if (queryClass) {
+      setSelectedSchoolId((current) => (current === queryClass.school.school.id ? current : queryClass.school.school.id))
+      setSelectedClassId((current) => (current === queryClass.classInfo.id ? current : queryClass.classInfo.id))
+    }
+
+    if (currentRouteView === 'classes') {
+      setWorkspaceMode('participants')
+      return
+    }
+
+    if (!queryClass) {
+      setTeacherRoute('classes', '', true)
+      setWorkspaceMode('participants')
+      return
+    }
+
+    setWorkspaceMode(currentRouteView === 'ranking' ? 'ranking' : 'participants')
+  }, [currentRouteView, routeClassId, schools, setTeacherRoute])
+
+  const selectClassState = useCallback(
+    (classId: string) => {
+      const target = findClassView(schools, classId)
+      if (!target) return
+      setSelectedSchoolId(target.school.school.id)
+      setSelectedClassId(target.classInfo.id)
+    },
+    [schools],
+  )
+
+  const openClass = useCallback(
+    (classId: string) => {
+      selectClassState(classId)
+      setWorkspaceMode('participants')
+      setTeacherRoute('class', classId)
+    },
+    [selectClassState, setTeacherRoute],
+  )
+
+  const openRanking = useCallback(
+    (classId: string) => {
+      selectClassState(classId)
+      setWorkspaceMode('ranking')
+      setTeacherRoute('ranking', classId)
+    },
+    [selectClassState, setTeacherRoute],
+  )
+
+  const changeWorkspaceMode = useCallback(
+    (mode: WorkspaceMode) => {
+      if (!activeClass) return
+      setWorkspaceMode(mode)
+      setTeacherRoute(mode === 'ranking' ? 'ranking' : 'class', activeClass.classInfo.id)
+    },
+    [activeClass, setTeacherRoute],
+  )
+
   const handleBound = async () => {
     await refreshRole()
     await refreshSchools()
@@ -233,19 +355,24 @@ export default function TeacherConsole() {
             schools={schools}
             activeSchool={activeSchool}
             activeClass={activeClass}
+            routeView={currentRouteView}
+            routeModal={currentRouteModal}
+            routeClassId={routeClassId}
             selectedClassId={selectedClassId}
             onSelectSchool={(schoolId) => {
               const nextSchool = schools.find((view) => view.school.id === schoolId)
               setSelectedSchoolId(schoolId)
               setSelectedClassId(nextSchool?.classes[0]?.id ?? '')
               setWorkspaceMode('participants')
+              setTeacherRoute('classes', '')
             }}
-            onSelectClass={(classId) => {
-              setSelectedClassId(classId)
-              setWorkspaceMode('participants')
-            }}
+            onSetActiveClass={selectClassState}
+            onOpenClass={openClass}
+            onOpenRanking={openRanking}
             workspaceMode={workspaceMode}
-            onWorkspaceMode={setWorkspaceMode}
+            onWorkspaceMode={changeWorkspaceMode}
+            onOpenModal={openTeacherModal}
+            onCloseModal={closeTeacherModal}
             onClassChanged={refreshSchools}
           />
         ) : null}
@@ -258,27 +385,40 @@ function Dashboard({
   schools,
   activeSchool,
   activeClass,
+  routeView,
+  routeModal,
+  routeClassId,
   selectedClassId,
   onSelectSchool,
-  onSelectClass,
+  onSetActiveClass,
+  onOpenClass,
+  onOpenRanking,
   workspaceMode,
   onWorkspaceMode,
+  onOpenModal,
+  onCloseModal,
   onClassChanged,
 }: {
   schools: TeacherSchoolView[]
   activeSchool: TeacherSchoolView
   activeClass: ActiveClass | null
+  routeView: TeacherRouteView
+  routeModal: TeacherRouteModal | null
+  routeClassId: string
   selectedClassId: string
   onSelectSchool: (schoolId: string) => void
-  onSelectClass: (classId: string) => void
+  onSetActiveClass: (classId: string) => void
+  onOpenClass: (classId: string) => void
+  onOpenRanking: (classId: string) => void
   workspaceMode: WorkspaceMode
   onWorkspaceMode: (mode: WorkspaceMode) => void
+  onOpenModal: (modal: TeacherRouteModal, classId?: string) => void
+  onCloseModal: () => void
   onClassChanged: () => Promise<void>
 }) {
   const t = useT()
   const [classView, setClassView] = useState<ClassViewMode>('cards')
   const [gradeFilter, setGradeFilter] = useState<GradeFilter>('all')
-  const [addClassOpen, setAddClassOpen] = useState(false)
   const gradeOptions = useMemo(() => {
     const grades = new Set<number>()
     let hasOther = false
@@ -306,14 +446,14 @@ function Dashboard({
   useEffect(() => {
     if (filteredClasses.length === 0) return
     if (filteredClasses.some((classInfo) => classInfo.id === selectedClassId)) return
-    onSelectClass(filteredClasses[0].id)
-  }, [filteredClasses, onSelectClass, selectedClassId])
+    onSetActiveClass(filteredClasses[0].id)
+  }, [filteredClasses, onSetActiveClass, selectedClassId])
 
   const changeGradeFilter = (value: GradeFilter) => {
     setGradeFilter(value)
     const nextClasses = activeSchool.classes.filter((classInfo) => value === 'all' || gradeValue(classInfo) === value)
     if (nextClasses.length > 0 && !nextClasses.some((classInfo) => classInfo.id === selectedClassId)) {
-      onSelectClass(nextClasses[0].id)
+      onSetActiveClass(nextClasses[0].id)
     }
   }
 
@@ -369,7 +509,7 @@ function Dashboard({
               {t('teacher.list')}
             </button>
           </div>
-          <button type="button" onClick={() => setAddClassOpen(true)}>
+          <button type="button" onClick={() => onOpenModal('add-class')}>
             {t('teacher.addClass')}
           </button>
         </div>
@@ -384,11 +524,13 @@ function Dashboard({
                 schoolName={activeSchool.school.name}
                 classInfo={classInfo}
                 selected={classInfo.id === selectedClassId}
-                onSelect={() => onSelectClass(classInfo.id)}
-                onViewRanking={() => {
-                  onSelectClass(classInfo.id)
-                  onWorkspaceMode('ranking')
-                }}
+                qrOpen={routeModal === 'qr' && routeClassId === classInfo.id}
+                resetOpen={routeModal === 'reset' && routeClassId === classInfo.id}
+                onSelect={() => onOpenClass(classInfo.id)}
+                onViewRanking={() => onOpenRanking(classInfo.id)}
+                onOpenQr={() => onOpenModal('qr', classInfo.id)}
+                onOpenReset={() => onOpenModal('reset', classInfo.id)}
+                onCloseModal={onCloseModal}
                 onClassChanged={onClassChanged}
               />
             ))}
@@ -398,11 +540,12 @@ function Dashboard({
             schoolName={activeSchool.school.name}
             classes={filteredClasses}
             selectedClassId={selectedClassId}
-            onSelectClass={onSelectClass}
-            onViewRanking={(classId) => {
-              onSelectClass(classId)
-              onWorkspaceMode('ranking')
-            }}
+            routeModal={routeModal}
+            routeClassId={routeClassId}
+            onOpenClass={onOpenClass}
+            onOpenRanking={onOpenRanking}
+            onOpenModal={onOpenModal}
+            onCloseModal={onCloseModal}
             onClassChanged={onClassChanged}
           />
         )
@@ -410,26 +553,25 @@ function Dashboard({
         <div className="panel muted">{t('teacher.noClassesGrade')}</div>
       ) : null}
 
-      {activeClass && selectedClassVisible ? (
+      {activeClass && selectedClassVisible && routeView !== 'classes' ? (
         <ClassWorkspace
           activeClass={activeClass}
           mode={workspaceMode}
           onModeChange={onWorkspaceMode}
           onClassChanged={onClassChanged}
         />
-      ) : (
+      ) : filteredClasses.length === 0 || activeSchool.classes.length === 0 ? (
         <div className="panel">{t('teacher.noClassesYet')}</div>
-      )}
+      ) : null}
 
-      {addClassOpen ? (
+      {routeModal === 'add-class' ? (
         <AddClassModal
           school={activeSchool}
-          onClose={() => setAddClassOpen(false)}
+          onClose={onCloseModal}
           onCreated={async (classInfo) => {
             await onClassChanged()
-            onSelectClass(classInfo.id)
-            onWorkspaceMode('participants')
-            setAddClassOpen(false)
+            onSetActiveClass(classInfo.id)
+            onOpenClass(classInfo.id)
           }}
         />
       ) : null}
@@ -441,15 +583,23 @@ function ClassListView({
   schoolName,
   classes,
   selectedClassId,
-  onSelectClass,
-  onViewRanking,
+  routeModal,
+  routeClassId,
+  onOpenClass,
+  onOpenRanking,
+  onOpenModal,
+  onCloseModal,
   onClassChanged,
 }: {
   schoolName: string
   classes: ClassDoc[]
   selectedClassId: string
-  onSelectClass: (classId: string) => void
-  onViewRanking: (classId: string) => void
+  routeModal: TeacherRouteModal | null
+  routeClassId: string
+  onOpenClass: (classId: string) => void
+  onOpenRanking: (classId: string) => void
+  onOpenModal: (modal: TeacherRouteModal, classId?: string) => void
+  onCloseModal: () => void
   onClassChanged: () => Promise<void>
 }) {
   const t = useT()
@@ -463,7 +613,7 @@ function ClassListView({
             key={classInfo.id}
             type="button"
             className={`class-list-item ${classInfo.id === selectedClass.id ? 'active' : ''}`}
-            onClick={() => onSelectClass(classInfo.id)}
+            onClick={() => onOpenClass(classInfo.id)}
           >
             <span>{classInfo.name}</span>
             <strong>{classInfo.joinCode}</strong>
@@ -475,8 +625,13 @@ function ClassListView({
         schoolName={schoolName}
         classInfo={selectedClass}
         selected
-        onSelect={() => onSelectClass(selectedClass.id)}
-        onViewRanking={() => onViewRanking(selectedClass.id)}
+        qrOpen={routeModal === 'qr' && routeClassId === selectedClass.id}
+        resetOpen={routeModal === 'reset' && routeClassId === selectedClass.id}
+        onSelect={() => onOpenClass(selectedClass.id)}
+        onViewRanking={() => onOpenRanking(selectedClass.id)}
+        onOpenQr={() => onOpenModal('qr', selectedClass.id)}
+        onOpenReset={() => onOpenModal('reset', selectedClass.id)}
+        onCloseModal={onCloseModal}
         onClassChanged={onClassChanged}
       />
     </section>
@@ -556,32 +711,41 @@ function ClassCard({
   schoolName,
   classInfo,
   selected,
+  qrOpen,
+  resetOpen,
   onSelect,
   onViewRanking,
+  onOpenQr,
+  onOpenReset,
+  onCloseModal,
   onClassChanged,
 }: {
   schoolName: string
   classInfo: ClassDoc
   selected: boolean
+  qrOpen: boolean
+  resetOpen: boolean
   onSelect: () => void
   onViewRanking: () => void
+  onOpenQr: () => void
+  onOpenReset: () => void
+  onCloseModal: () => void
   onClassChanged: () => Promise<void>
 }) {
   const toast = useToast()
   const t = useT()
-  const [qrOpen, setQrOpen] = useState(false)
   const [busyAction, setBusyAction] = useState<'reset' | 'toggle' | ''>('')
   const url = joinUrl(classInfo.joinCode)
   const grade = classGrade(classInfo.name)
   const gradeText = grade === 'other' ? null : t('teacher.gradeLabel', { grade })
 
   const resetCode = async () => {
-    if (!window.confirm(t('teacher.resetClassCodeConfirm'))) return
     setBusyAction('reset')
     try {
       const nextCode = await api.resetJoinCode(classPath(classInfo))
       toast(t('teacher.classCodeReset', { code: nextCode }), 'success')
       await onClassChanged()
+      onCloseModal()
     } catch (error) {
       toast(errorText(error), 'error')
     } finally {
@@ -626,7 +790,7 @@ function ClassCard({
           <ShimmerText busy={busyAction === 'toggle'}>{classInfo.joinActive ? t('teacher.activeForNewJoins') : t('teacher.newJoinsDisabled')}</ShimmerText>
         </em>
       </button>
-      <button className="qr-box" type="button" onClick={() => setQrOpen(true)} aria-label={t('teacher.openQrFor', { className: classInfo.name })}>
+      <button className="qr-box" type="button" onClick={onOpenQr} aria-label={t('teacher.openQrFor', { className: classInfo.name })}>
         <QRCodeSVG value={url} size={112} marginSize={1} />
       </button>
       <div className="row-actions compact">
@@ -639,14 +803,63 @@ function ClassCard({
         <button className="secondary" type="button" onClick={toggleActive} disabled={busyAction === 'toggle'}>
           {busyAction === 'toggle' ? t('common.saving') : classInfo.joinActive ? t('common.disable') : t('common.enable')}
         </button>
-        <button className="danger" type="button" onClick={resetCode} disabled={busyAction === 'reset'}>
+        <button className="danger" type="button" onClick={onOpenReset} disabled={busyAction === 'reset'}>
           {busyAction === 'reset' ? t('admin.resetting') : t('common.reset')}
         </button>
       </div>
       {qrOpen ? (
-        <PrintSheet schoolName={schoolName} classInfo={classInfo} joinUrlValue={url} onClose={() => setQrOpen(false)} />
+        <PrintSheet schoolName={schoolName} classInfo={classInfo} joinUrlValue={url} onClose={onCloseModal} />
+      ) : null}
+      {resetOpen ? (
+        <ResetClassCodeModal classInfo={classInfo} busy={busyAction === 'reset'} onCancel={onCloseModal} onConfirm={() => void resetCode()} />
       ) : null}
     </article>
+  )
+}
+
+function ResetClassCodeModal({
+  classInfo,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  classInfo: ClassDoc
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const t = useT()
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onCancel])
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <div
+        className="dialog-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('teacher.resetClassCodeConfirm')}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2>{t('common.reset')}</h2>
+        <p>{t('teacher.resetClassCodeConfirm')}</p>
+        <p className="muted-text">{classInfo.name}</p>
+        <div className="row-actions">
+          <button className="ghost" type="button" onClick={onCancel} disabled={busy}>
+            {t('common.cancel')}
+          </button>
+          <button className="danger" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? t('admin.resetting') : t('common.confirm')}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
