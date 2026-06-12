@@ -36,8 +36,11 @@ export default function AuthPanel({
   const [selectedMode, setSelectedMode] = useState<AuthMode>(mode ?? 'sign-in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
-  const [resetSent, setResetSent] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetError, setResetError] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const toast = useToast()
@@ -87,19 +90,18 @@ export default function AuthPanel({
 
   const resetPassword = async (event: FormEvent) => {
     event.preventDefault()
-    setBusy(true)
-    setError('')
-    setResetSent(false)
+    setResetBusy(true)
+    setResetError('')
     try {
-      await sendPasswordResetEmail(auth, email.trim())
-      setResetSent(true)
+      await sendPasswordResetEmail(auth, resetEmail.trim())
+      setResetOpen(false)
       toast('Password reset email sent. Check your inbox.', 'success')
     } catch (err) {
       const message = errorText(err)
-      setError(message)
+      setResetError(message)
       toast(message, 'error')
     } finally {
-      setBusy(false)
+      setResetBusy(false)
     }
   }
 
@@ -128,13 +130,24 @@ export default function AuthPanel({
           <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" />
         </label>
         <label>
-          Password
-          <input
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            type="password"
-            autoComplete={authMode === 'sign-up' ? 'new-password' : 'current-password'}
-          />
+          <span>Password</span>
+          <div className="auth-password-field">
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type={showPassword ? 'text' : 'password'}
+              autoComplete={authMode === 'sign-up' ? 'new-password' : 'current-password'}
+            />
+            <button
+              className="auth-icon-button"
+              type="button"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              title={showPassword ? 'Hide password' : 'Show password'}
+              onClick={() => setShowPassword((value) => !value)}
+            >
+              {showPassword ? '🙈' : '👁'}
+            </button>
+          </div>
         </label>
         <button className="auth-button primary" type="submit" disabled={busy || !email.trim() || password.length < 6}>
           {busy ? 'Working...' : authMode === 'sign-up' ? 'Create account' : 'Sign in'}
@@ -146,25 +159,47 @@ export default function AuthPanel({
             className="auth-link-button"
             type="button"
             onClick={() => {
-              setResetOpen((value) => !value)
-              setResetSent(false)
-              setError('')
+              setResetEmail(email.trim())
+              setResetError('')
+              setResetOpen(true)
             }}
           >
             Forgot password?
           </button>
-          {resetOpen ? (
-            <form className="auth-form compact" onSubmit={resetPassword}>
-              <p>Enter your account email and we will send a password reset link.</p>
-              <button className="auth-button" type="submit" disabled={busy || !email.trim()}>
-                {busy ? 'Sending...' : 'Send reset email'}
-              </button>
-            </form>
-          ) : null}
-          {resetSent ? <div className="auth-alert success">Password reset email sent. Check your inbox.</div> : null}
         </div>
       ) : null}
       {error ? <div className="auth-alert">{error}</div> : null}
+      {resetOpen ? (
+        <div className="auth-modal-backdrop" role="presentation">
+          <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="password-reset-title">
+            <div className="auth-panel-head">
+              <p className="auth-eyebrow">Password reset</p>
+              <h2 id="password-reset-title">Send reset email</h2>
+            </div>
+            <form className="auth-form" onSubmit={resetPassword}>
+              <label>
+                Email
+                <input
+                  autoFocus
+                  value={resetEmail}
+                  onChange={(event) => setResetEmail(event.target.value)}
+                  type="email"
+                  autoComplete="email"
+                />
+              </label>
+              {resetError ? <div className="auth-alert">{resetError}</div> : null}
+              <div className="auth-actions auth-modal-actions">
+                <button className="auth-button" type="button" onClick={() => setResetOpen(false)} disabled={resetBusy}>
+                  Cancel
+                </button>
+                <button className="auth-button primary" type="submit" disabled={resetBusy || !resetEmail.trim()}>
+                  {resetBusy ? 'Sending...' : 'Send email'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </section>
   )
 }

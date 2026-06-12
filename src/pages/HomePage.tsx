@@ -94,33 +94,14 @@ export default function HomePage() {
               />
             ) : null}
             {error ? <p className={styles.formError}>{error}</p> : null}
+            {isChecking ? (
+              <section className="auth-panel">
+                <p className="auth-eyebrow">Session</p>
+                <h2>Checking account...</h2>
+              </section>
+            ) : null}
+            {showRoleLanding ? <RoleLanding user={user} onRoleChanged={refreshRole} /> : null}
           </div>
-          {isChecking ? (
-            <section className="auth-panel">
-              <p className="auth-eyebrow">Session</p>
-              <h2>Checking account...</h2>
-            </section>
-          ) : showRoleLanding ? (
-            <RoleLanding user={user} onRoleChanged={refreshRole} />
-          ) : !isSignedIn && entryMode === 'teacher' ? (
-            <section className="auth-panel">
-              <p className="auth-eyebrow">Teacher entry</p>
-              <h2>Use your teacher code first</h2>
-              <p>Enter the teacher code from your event host. Class codes are used in the VibeBlocks app.</p>
-            </section>
-          ) : !isSignedIn && entryMode === 'sign-in' ? (
-            <section className="auth-panel">
-              <p className="auth-eyebrow">Console access</p>
-              <h2>Sign in only</h2>
-              <p>New teacher accounts start from the teacher code flow.</p>
-            </section>
-          ) : (
-            <section className="auth-panel">
-              <p className="auth-eyebrow">Entry</p>
-              <h2>Teacher code or sign in</h2>
-              <p>Admin invites are redeemed after sign in.</p>
-            </section>
-          )}
         </div>
       </section>
     </main>
