@@ -284,7 +284,9 @@
 .boardTable td:nth-child(6),
 .boardTable th:nth-child(6),
 .boardTable td:nth-child(7),
-.boardTable th:nth-child(7) {
+.boardTable th:nth-child(7),
+.boardTable td:nth-child(8),
+.boardTable th:nth-child(8) {
   text-align: right;
 }
 
@@ -333,11 +335,13 @@
 }
 
 .challengeCell,
+.completedCell,
 .averageCell {
   font-variant-numeric: tabular-nums;
   font-weight: 800;
 }
 
+.completedCell,
 .averageCell {
   color: #10202f;
 }
@@ -480,6 +484,7 @@
     grid-template-columns: 46px minmax(0, 1fr);
     grid-template-areas:
       "rank name"
+      "completed completed"
       "average average"
       "c1 c1"
       "c2 c2"
@@ -505,7 +510,8 @@
   .boardTable td:nth-child(4),
   .boardTable td:nth-child(5),
   .boardTable td:nth-child(6),
-  .boardTable td:nth-child(7) {
+  .boardTable td:nth-child(7),
+  .boardTable td:nth-child(8) {
     text-align: left;
   }
 
@@ -545,6 +551,16 @@
 
   .averageCell {
     grid-area: average;
+    display: flex;
+    gap: 3px;
+    align-items: center;
+    justify-content: space-between;
+    border-top: 1px solid #eef2f7;
+    background: #f5f8fb;
+  }
+
+  .completedCell {
+    grid-area: completed;
     display: flex;
     gap: 3px;
     align-items: center;

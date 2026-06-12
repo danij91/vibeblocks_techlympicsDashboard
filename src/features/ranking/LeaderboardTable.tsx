@@ -1,4 +1,3 @@
-import { Fragment } from 'react'
 import { formatSec } from '../../api/scoring'
 import type { ChallengeDef, ChallengeSlot, LeaderboardRow } from '../../api/types'
 import styles from './publicPages.module.css'
@@ -11,10 +10,6 @@ const FALLBACK_CHALLENGES: ChallengeDef[] = [
 
 function totalAttempts(row: LeaderboardRow): number {
   return row.attemptsUsed.c1 + row.attemptsUsed.c2 + row.attemptsUsed.c3
-}
-
-function completedChallenges(row: LeaderboardRow, challenges: ChallengeDef[]): number {
-  return challenges.filter((challenge) => row.bests[challenge.slot] !== undefined).length
 }
 
 function statusLabel(status: LeaderboardRow['status']): string {
@@ -36,6 +31,19 @@ function slotLimitLabel(attemptsPerChallenge: number | null): string {
   return attemptsPerChallenge === null ? 'unlimited' : String(attemptsPerChallenge)
 }
 
+function sortedRows(rows: LeaderboardRow[]): LeaderboardRow[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      if (b.row.completedCount !== a.row.completedCount) return b.row.completedCount - a.row.completedCount
+      const aAverage = a.row.averageSec ?? Number.POSITIVE_INFINITY
+      const bAverage = b.row.averageSec ?? Number.POSITIVE_INFINITY
+      if (aAverage !== bAverage) return aAverage - bAverage
+      return a.index - b.index
+    })
+    .map(({ row }) => row)
+}
+
 export default function LeaderboardTable({
   rows,
   challenges = FALLBACK_CHALLENGES,
@@ -45,7 +53,7 @@ export default function LeaderboardTable({
   challenges?: ChallengeDef[]
   attemptsPerChallenge?: number | null
 }) {
-  const visibleRows = rows.filter((row) => row.rank !== null || totalAttempts(row) > 0)
+  const visibleRows = sortedRows(rows)
   const maxAttempts = maxAttemptsLabel(attemptsPerChallenge, challenges.length)
 
   if (visibleRows.length === 0) {
@@ -62,58 +70,56 @@ export default function LeaderboardTable({
             {challenges.map((challenge) => (
               <th key={challenge.slot}>{challenge.name}</th>
             ))}
+            <th>Completed</th>
             <th>Average</th>
             <th>Attempts</th>
           </tr>
         </thead>
         <tbody>
-          {visibleRows.map((row, index) => (
-            <Fragment key={row.publicId}>
-              {row.rank === null && visibleRows[index - 1]?.rank !== null ? (
-                <tr className={styles.groupRow}>
-                  <td colSpan={challenges.length + 4}>Unranked - complete all 3 challenges to enter the ranking</td>
-                </tr>
-              ) : null}
-              <tr className={row.rank === null ? styles.unrankedRow : undefined}>
-                <td className={styles.rankCell}>
-                  <span className={styles.cellLabel}>Rank</span>
-                  <span className={styles.cellValue}>{row.rank ?? '-'}</span>
+          {visibleRows.map((row) => (
+            <tr key={row.publicId} className={row.completedCount === 0 ? styles.unrankedRow : undefined}>
+              <td className={styles.rankCell}>
+                <span className={styles.cellLabel}>Rank</span>
+                <span className={styles.cellValue}>{row.completedCount > 0 ? row.rank ?? '-' : '-'}</span>
+              </td>
+              <td className={styles.participantCell}>
+                <span className={styles.nameCell}>{row.name}</span>
+                <span className={styles.publicId}>{row.publicId}</span>
+                <span className={styles.statusChip}>{statusLabel(row.status)}</span>
+                <span className={styles.progressChip}>
+                  {row.completedCount}/{challenges.length} completed
+                </span>
+              </td>
+              {challenges.map((challenge) => (
+                <td key={challenge.slot} className={styles.challengeCell}>
+                  <span className={styles.cellLabel}>{challenge.name}</span>
+                  <span className={styles.cellValue}>{formatSec(row.bests[challenge.slot])}</span>
                 </td>
-                <td className={styles.participantCell}>
-                  <span className={styles.nameCell}>{row.name}</span>
-                  <span className={styles.publicId}>{row.publicId}</span>
-                  <span className={styles.statusChip}>{statusLabel(row.status)}</span>
-                  {row.rank === null ? (
-                    <span className={styles.progressChip}>
-                      Challenge {completedChallenges(row, challenges)}/{challenges.length}
+              ))}
+              <td className={styles.completedCell}>
+                <span className={styles.cellLabel}>Completed</span>
+                <span className={styles.cellValue}>
+                  {row.completedCount}/{challenges.length}
+                </span>
+              </td>
+              <td className={styles.averageCell}>
+                <span className={styles.cellLabel}>Average</span>
+                <span className={styles.cellValue}>{formatSec(row.averageSec)}</span>
+              </td>
+              <td className={styles.attemptCell}>
+                <span className={styles.cellLabel}>Attempts</span>
+                <span className={styles.cellValue}>
+                  {totalAttempts(row)}/{maxAttempts}
+                </span>
+                <span className={styles.attemptBreakdown}>
+                  {challenges.map((challenge) => (
+                    <span key={challenge.slot}>
+                      {challengeShortLabel(challenge.slot)} {row.attemptsUsed[challenge.slot]}/{slotLimitLabel(attemptsPerChallenge)}
                     </span>
-                  ) : null}
-                </td>
-                {challenges.map((challenge) => (
-                  <td key={challenge.slot} className={styles.challengeCell}>
-                    <span className={styles.cellLabel}>{challenge.name}</span>
-                    <span className={styles.cellValue}>{formatSec(row.bests[challenge.slot])}</span>
-                  </td>
-                ))}
-                <td className={styles.averageCell}>
-                  <span className={styles.cellLabel}>Average</span>
-                  <span className={styles.cellValue}>{formatSec(row.averageSec)}</span>
-                </td>
-                <td className={styles.attemptCell}>
-                  <span className={styles.cellLabel}>Attempts</span>
-                  <span className={styles.cellValue}>
-                    {totalAttempts(row)}/{maxAttempts}
-                  </span>
-                  <span className={styles.attemptBreakdown}>
-                    {challenges.map((challenge) => (
-                      <span key={challenge.slot}>
-                        {challengeShortLabel(challenge.slot)} {row.attemptsUsed[challenge.slot]}/{slotLimitLabel(attemptsPerChallenge)}
-                      </span>
-                    ))}
-                  </span>
-                </td>
-              </tr>
-            </Fragment>
+                  ))}
+                </span>
+              </td>
+            </tr>
           ))}
         </tbody>
       </table>

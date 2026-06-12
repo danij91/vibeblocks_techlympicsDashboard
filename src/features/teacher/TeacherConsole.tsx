@@ -25,6 +25,7 @@ type ActiveClass = {
   classInfo: ClassDoc
 }
 type WorkspaceMode = 'participants' | 'ranking'
+type ClassViewMode = 'cards' | 'list'
 
 function classPath(classInfo: ClassDoc): ClassPath {
   return {
@@ -69,6 +70,22 @@ function joinUrl(joinCode: string): string {
   return `${window.location.origin}/join/${joinCode}`
 }
 
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
 export default function TeacherConsole() {
   const navigate = useNavigate()
   const toast = useToast()
@@ -79,6 +96,7 @@ export default function TeacherConsole() {
   const [selectedClassId, setSelectedClassId] = useState<string>('')
   const [loadingSchools, setLoadingSchools] = useState(false)
   const [roleLoading, setRoleLoading] = useState(false)
+  const [bootstrapping, setBootstrapping] = useState(true)
   const [notice, setNotice] = useState('')
   const [showGate, setShowGate] = useState(false)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('participants')
@@ -126,11 +144,12 @@ export default function TeacherConsole() {
   useEffect(() => {
     if (authLoading) return
     if (!isSignedIn) {
+      setBootstrapping(false)
       navigate('/', { replace: true })
       return
     }
-    void refreshRole()
-    void refreshSchools()
+    setBootstrapping(true)
+    void Promise.all([refreshRole(), refreshSchools()]).finally(() => setBootstrapping(false))
   }, [authLoading, isSignedIn, navigate, refreshRole, refreshSchools, user?.uid])
 
   const activeSchool = useMemo(
@@ -155,12 +174,12 @@ export default function TeacherConsole() {
     await Promise.all([refreshRole(), refreshSchools()])
   }
 
-  if (authLoading || !isSignedIn) {
+  if (authLoading || !isSignedIn || bootstrapping) {
     return (
       <main className="teacher-page">
         <style>{teacherStyles}</style>
         <section className="teacher-shell" aria-label="Teacher dashboard">
-          <div className="panel muted">Redirecting to sign in...</div>
+          <div className="panel muted loading-panel">Loading teacher console...</div>
         </section>
       </main>
     )
@@ -175,13 +194,6 @@ export default function TeacherConsole() {
           <div>
             <p className="teacher-kicker">Techlympics 2026</p>
             <h1>Teacher Console</h1>
-          </div>
-          <div className="teacher-actions">
-            {schools.length > 0 ? (
-              <button className="secondary" type="button" onClick={() => setShowGate(true)}>
-                Add school
-              </button>
-            ) : null}
           </div>
         </header>
 
@@ -240,6 +252,9 @@ function Dashboard({
   onWorkspaceMode: (mode: WorkspaceMode) => void
   onClassChanged: () => Promise<void>
 }) {
+  const [classView, setClassView] = useState<ClassViewMode>('cards')
+  const [addClassOpen, setAddClassOpen] = useState(false)
+
   return (
     <section className="dashboard">
       <div className="school-tabs" role="tablist" aria-label="Schools">
@@ -255,22 +270,58 @@ function Dashboard({
         ))}
       </div>
 
-      <section className="class-grid" aria-label={`${activeSchool.school.name} classes`}>
-        {activeSchool.classes.map((classInfo) => (
-          <ClassCard
-            key={classInfo.id}
+      <div className="class-toolbar">
+        <div>
+          <h2>{activeSchool.school.name}</h2>
+          <p>{activeSchool.classes.length} classes</p>
+        </div>
+        <div className="class-toolbar-actions">
+          <div className="segmented compact-segmented" role="group" aria-label="Class view">
+            <button type="button" className={classView === 'cards' ? 'active' : ''} onClick={() => setClassView('cards')}>
+              Cards
+            </button>
+            <button type="button" className={classView === 'list' ? 'active' : ''} onClick={() => setClassView('list')}>
+              List
+            </button>
+          </div>
+          <button type="button" onClick={() => setAddClassOpen(true)}>
+            Add class
+          </button>
+        </div>
+      </div>
+
+      {activeSchool.classes.length > 0 ? (
+        classView === 'cards' ? (
+          <section className="class-grid" aria-label={`${activeSchool.school.name} classes`}>
+            {activeSchool.classes.map((classInfo) => (
+              <ClassCard
+                key={classInfo.id}
+                schoolName={activeSchool.school.name}
+                classInfo={classInfo}
+                selected={classInfo.id === selectedClassId}
+                onSelect={() => onSelectClass(classInfo.id)}
+                onViewRanking={() => {
+                  onSelectClass(classInfo.id)
+                  onWorkspaceMode('ranking')
+                }}
+                onClassChanged={onClassChanged}
+              />
+            ))}
+          </section>
+        ) : (
+          <ClassListView
             schoolName={activeSchool.school.name}
-            classInfo={classInfo}
-            selected={classInfo.id === selectedClassId}
-            onSelect={() => onSelectClass(classInfo.id)}
-            onViewRanking={() => {
-              onSelectClass(classInfo.id)
+            classes={activeSchool.classes}
+            selectedClassId={selectedClassId}
+            onSelectClass={onSelectClass}
+            onViewRanking={(classId) => {
+              onSelectClass(classId)
               onWorkspaceMode('ranking')
             }}
             onClassChanged={onClassChanged}
           />
-        ))}
-      </section>
+        )
+      ) : null}
 
       {activeClass ? (
         <ClassWorkspace
@@ -282,7 +333,133 @@ function Dashboard({
       ) : (
         <div className="panel">No classes yet.</div>
       )}
+
+      {addClassOpen ? (
+        <AddClassModal
+          school={activeSchool}
+          onClose={() => setAddClassOpen(false)}
+          onCreated={async (classInfo) => {
+            await onClassChanged()
+            onSelectClass(classInfo.id)
+            onWorkspaceMode('participants')
+            setAddClassOpen(false)
+          }}
+        />
+      ) : null}
     </section>
+  )
+}
+
+function ClassListView({
+  schoolName,
+  classes,
+  selectedClassId,
+  onSelectClass,
+  onViewRanking,
+  onClassChanged,
+}: {
+  schoolName: string
+  classes: ClassDoc[]
+  selectedClassId: string
+  onSelectClass: (classId: string) => void
+  onViewRanking: (classId: string) => void
+  onClassChanged: () => Promise<void>
+}) {
+  const selectedClass = classes.find((classInfo) => classInfo.id === selectedClassId) ?? classes[0]
+
+  return (
+    <section className="class-list-layout" aria-label={`${schoolName} class list`}>
+      <div className="class-list" role="list">
+        {classes.map((classInfo) => (
+          <button
+            key={classInfo.id}
+            type="button"
+            className={`class-list-item ${classInfo.id === selectedClass.id ? 'active' : ''}`}
+            onClick={() => onSelectClass(classInfo.id)}
+          >
+            <span>{classInfo.name}</span>
+            <strong>{classInfo.joinCode}</strong>
+            <em>{classInfo.joinActive ? 'Active' : 'Disabled'}</em>
+          </button>
+        ))}
+      </div>
+      <ClassCard
+        schoolName={schoolName}
+        classInfo={selectedClass}
+        selected
+        onSelect={() => onSelectClass(selectedClass.id)}
+        onViewRanking={() => onViewRanking(selectedClass.id)}
+        onClassChanged={onClassChanged}
+      />
+    </section>
+  )
+}
+
+function AddClassModal({
+  school,
+  onClose,
+  onCreated,
+}: {
+  school: TeacherSchoolView
+  onClose: () => void
+  onCreated: (classInfo: ClassDoc) => Promise<void>
+}) {
+  const toast = useToast()
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  const createClass = async () => {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      toast('Enter a class name.', 'error')
+      return
+    }
+    setBusy(true)
+    try {
+      const classInfo = await api.addClass({ eventId: school.school.eventId, schoolId: school.school.id }, trimmed)
+      toast(`${classInfo.name} added.`, 'success')
+      await onCreated(classInfo)
+    } catch (error) {
+      toast(errorText(error), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <form
+        className="dialog-panel"
+        aria-label="Add class"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault()
+          void createClass()
+        }}
+      >
+        <h2>Add class</h2>
+        <label>
+          Class name
+          <input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: 4 Amanah" />
+        </label>
+        <div className="row-actions">
+          <button className="ghost" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" disabled={busy}>
+            {busy ? 'Adding...' : 'Add class'}
+          </button>
+        </div>
+      </form>
+    </div>
   )
 }
 
@@ -334,6 +511,15 @@ function ClassCard({
     }
   }
 
+  const copyClassCode = async () => {
+    try {
+      await copyText(classInfo.joinCode)
+      toast(`Class code ${classInfo.joinCode} copied.`, 'success')
+    } catch (error) {
+      toast(errorText(error), 'error')
+    }
+  }
+
   return (
     <article className={`class-card ${selected ? 'selected' : ''}`}>
       <button className="class-card-select" type="button" onClick={onSelect} aria-pressed={selected}>
@@ -345,6 +531,9 @@ function ClassCard({
         <QRCodeSVG value={url} size={112} marginSize={1} />
       </button>
       <div className="row-actions compact">
+        <button className="secondary" type="button" onClick={copyClassCode}>
+          Copy code
+        </button>
         <button className="secondary" type="button" onClick={onViewRanking}>
           View ranking
         </button>
@@ -373,30 +562,39 @@ function PrintSheet({
   joinUrlValue: string
   onClose: () => void
 }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   return (
-    <div className="print-modal">
-      <div className="print-toolbar">
-        <button className="ghost" type="button" onClick={onClose}>
-          Close
-        </button>
-        <button type="button" onClick={() => window.print()}>
-          Print
-        </button>
-      </div>
-      <section className="print-sheet" aria-label={`${classInfo.name} print sheet`}>
-        <p className="print-kicker">Techlympics 2026</p>
-        <h1>{schoolName}</h1>
-        <h2>{classInfo.name}</h2>
-        <div className="print-qr">
-          <QRCodeSVG value={joinUrlValue} size={280} marginSize={2} />
+    <div className="modal-backdrop print-modal" role="presentation" onClick={onClose}>
+      <div className="print-dialog" role="dialog" aria-modal="true" aria-label={`${classInfo.name} QR code`} onClick={(event) => event.stopPropagation()}>
+        <div className="print-toolbar">
+          <button className="ghost" type="button" onClick={onClose}>
+            Close
+          </button>
+          <button type="button" onClick={() => window.print()}>
+            Print
+          </button>
         </div>
-        <p className="print-code">{classInfo.joinCode}</p>
-        <ol>
-          <li>Open the Techlympics join page.</li>
-          <li>Scan this QR code or enter the class code.</li>
-          <li>Register your name, then submit your FC-1 run.</li>
-        </ol>
-      </section>
+        <section className="print-sheet" aria-label={`${classInfo.name} print sheet`}>
+          <p className="print-kicker">Techlympics 2026</p>
+          <h1>{schoolName}</h1>
+          <h2>{classInfo.name}</h2>
+          <div className="print-qr">
+            <QRCodeSVG value={joinUrlValue} size={280} marginSize={2} />
+          </div>
+          <p className="print-code">{classInfo.joinCode}</p>
+          <p className="print-description">
+            Students scan this with their phone camera to open the VibeBlocks app and fill the class code automatically. If the app is not installed,
+            they will be sent to the install guide.
+          </p>
+        </section>
+      </div>
     </div>
   )
 }
@@ -687,13 +885,15 @@ const teacherStyles = `
 .teacher-actions,
 .table-actions,
 .workspace-actions,
+.class-toolbar-actions,
 .ranking-toolbar {
   display: flex;
   align-items: center;
 }
 .teacher-topbar,
 .workspace-header,
-.panel-header {
+.panel-header,
+.class-toolbar {
   justify-content: space-between;
   gap: 16px;
 }
@@ -719,9 +919,15 @@ const teacherStyles = `
 .teacher-actions,
 .row-actions,
 .table-actions,
-.workspace-actions {
+.workspace-actions,
+.class-toolbar-actions {
   gap: 8px;
   flex-wrap: wrap;
+}
+.loading-panel {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
 }
 .teacher-user {
   color: #515766;
@@ -878,6 +1084,74 @@ input {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.class-toolbar {
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid #dfe5f1;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.class-toolbar h2,
+.dialog-panel h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+.class-toolbar p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-weight: 800;
+}
+.compact-segmented button {
+  min-width: 72px;
+}
+.class-list-layout {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
+}
+.class-list {
+  align-self: start;
+  background: white;
+  border: 1px solid #dfe5f1;
+  border-radius: 8px;
+  display: grid;
+  overflow: hidden;
+}
+.class-list-item {
+  align-items: center;
+  background: white;
+  border-bottom: 1px solid #edf1f8;
+  border-radius: 0;
+  color: #172033;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  justify-content: stretch;
+  min-height: 54px;
+  padding: 0 14px;
+  text-align: left;
+}
+.class-list-item:last-child {
+  border-bottom: 0;
+}
+.class-list-item.active {
+  background: #eef4ff;
+  color: #1746ad;
+}
+.class-list-item span {
+  overflow-wrap: anywhere;
+}
+.class-list-item strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0;
+}
+.class-list-item em {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
 }
 .class-card {
   display: grid;
@@ -1041,7 +1315,7 @@ th {
   background: white;
   box-shadow: 0 8px 22px rgba(29, 44, 77, .06);
 }
-.print-modal {
+.modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 10;
@@ -1049,6 +1323,21 @@ th {
   display: grid;
   place-items: center;
   padding: 24px;
+}
+.dialog-panel,
+.print-dialog {
+  width: min(680px, 92vw);
+}
+.dialog-panel {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, .22);
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+.dialog-panel .row-actions {
+  justify-content: flex-end;
 }
 .print-toolbar {
   display: flex;
@@ -1066,7 +1355,7 @@ th {
   justify-content: center;
   max-height: calc(100vh - 120px);
   padding: 48px;
-  width: min(680px, 92vw);
+  width: 100%;
 }
 .print-sheet h1 {
   font-size: 34px;
@@ -1085,26 +1374,33 @@ th {
   font-weight: 900;
   margin: 0 0 20px;
 }
-.print-sheet ol {
+.print-description {
   color: #344054;
   font-size: 18px;
   line-height: 1.6;
   margin: 0;
+  max-width: 520px;
+  text-align: center;
 }
 @media (max-width: 820px) {
   .teacher-page {
     padding: 14px;
   }
   .teacher-topbar,
-  .workspace-header {
+  .workspace-header,
+  .class-toolbar {
     align-items: flex-start;
     flex-direction: column;
   }
   .workspace-grid {
     grid-template-columns: 1fr;
   }
+  .class-list-layout {
+    grid-template-columns: 1fr;
+  }
   .workspace-actions,
-  .ranking-toolbar {
+  .ranking-toolbar,
+  .class-toolbar-actions {
     align-items: stretch;
     flex-direction: column;
     width: 100%;
