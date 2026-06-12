@@ -69,9 +69,9 @@ function seed(): Store {
     { id: 'sch-sel', eventId: event.id, name: 'Selangor Pilot School', state: 'Selangor', teacherCode: 'T-SEL23456', createdAt: now() },
   ]
   const classes: ClassDoc[] = [
-    { id: 'cls-k3a', eventId: event.id, schoolId: 'sch-kedah', name: '3 Amanah', joinCode: 'KEDAH7', createdAt: now() },
-    { id: 'cls-k3b', eventId: event.id, schoolId: 'sch-kedah', name: '3 Bestari', joinCode: 'KEDAH8', createdAt: now() },
-    { id: 'cls-s5a', eventId: event.id, schoolId: 'sch-sel', name: '5 Cerdik', joinCode: 'SELFC2', createdAt: now() },
+    { id: 'cls-k3a', eventId: event.id, schoolId: 'sch-kedah', name: '3 Amanah', joinCode: 'KEDAH7', joinActive: true, createdAt: now() },
+    { id: 'cls-k3b', eventId: event.id, schoolId: 'sch-kedah', name: '3 Bestari', joinCode: 'KEDAH8', joinActive: true, createdAt: now() },
+    { id: 'cls-s5a', eventId: event.id, schoolId: 'sch-sel', name: '5 Cerdik', joinCode: 'SELFC2', joinActive: true, createdAt: now() },
   ]
   const names = ['Aiman bin Khairul', 'Nurul Izzah', 'Lim Wei Jun', 'Priya a/p Kumar', 'Hafiz bin Roslan', 'Tan Mei Ling']
   const participants: ParticipantDoc[] = names.map((name, i) => ({
@@ -142,6 +142,7 @@ function seed(): Store {
 
 export function createMockApi(): CompetitionApi {
   const s = seed()
+  const deviceUid = uid() // mock: 이 세션의 '내 기기' — 재가입 부활 식별
   const delay = <T,>(v: T): Promise<T> => new Promise((r) => setTimeout(() => r(v), 150))
 
   // UI 개발 편의: 콘솔 __mockRole('teacher'|'admin'|'master'|null) — mock 전용 (CONTRACT §8)
@@ -184,6 +185,19 @@ export function createMockApi(): CompetitionApi {
     async joinClass(joinCode, profile) {
       const info = findClassByCode(joinCode)
       if (info.event.frozen) throw new Error('EVENT_FROZEN')
+      if (!info.classInfo.joinActive) throw new Error('JOIN_DISABLED')
+      // v3 부활: 같은 기기(ownerUid)의 기존 참가가 있으면 재활성 — 시도 비충전
+      const prior = s.participants.find((x) => x.classId === info.classInfo.id && x.ownerUid === deviceUid)
+      if (prior) {
+        prior.status = 'pending'
+        prior.name = profile.name
+        prior.statusHistory.push({ status: 'pending', at: now(), by: deviceUid })
+        const be = (s.board.get(info.classInfo.id) ?? []).find((e) => e.participantId === prior.id)
+        if (be) be.status = 'pending'
+        const rc = [...s.recovery.entries()].find(([, pid]) => pid === prior.id)?.[0] ?? newRecoveryCode()
+        s.recovery.set(rc, prior.id)
+        return delay({ ...info, participant: prior, recoveryCode: rc })
+      }
       const recoveryCode = newRecoveryCode()
       const participant: ParticipantDoc = {
         id: `p-${Math.random().toString(36).slice(2, 9)}`,
@@ -194,7 +208,7 @@ export function createMockApi(): CompetitionApi {
         grade: profile.grade,
         publicId: newPublicId(),
         status: 'pending',
-        ownerUid: uid(),
+        ownerUid: deviceUid,
         recoveryHash: await sha256Hex(recoveryCode),
         registeredAt: now(),
         statusHistory: [],
@@ -216,11 +230,14 @@ export function createMockApi(): CompetitionApi {
       const participant = s.participants.find((x) => x.id === p.participantId)
       if (!participant) throw new Error('PARTICIPANT_NOT_FOUND')
       if (participant.status === 'rejected') throw new Error('REJECTED')
+      if (participant.status === 'withdrawn') throw new Error('WITHDRAWN')
       const event = s.events.find((x) => x.id === p.eventId)!
       if (event.frozen) throw new Error('EVENT_FROZEN')
+      const nowMs = Date.now()
+      if (nowMs < Date.parse(event.startsAt) || nowMs > Date.parse(event.endsAt)) throw new Error('EVENT_NOT_OPEN')
       const list = s.attempts.get(participant.id) ?? []
       const slotUsed = list.filter((a) => a.slot === slot).length
-      if (slotUsed >= event.attemptsPerChallenge) throw new Error('NO_ATTEMPTS_LEFT')
+      if (event.attemptsPerChallenge !== null && slotUsed >= event.attemptsPerChallenge) throw new Error('NO_ATTEMPTS_LEFT')
       const attemptNo = slotUsed + 1
       list.push({ id: `${participant.id}_${slot}_${attemptNo}`, slot, attemptNo, metrics, submittedAt: now() })
       s.attempts.set(participant.id, list)
@@ -241,7 +258,7 @@ export function createMockApi(): CompetitionApi {
       return delay({
         slot,
         attemptNo,
-        remaining: event.attemptsPerChallenge - attemptNo,
+        remaining: event.attemptsPerChallenge === null ? -1 : event.attemptsPerChallenge - attemptNo,
         isNewBest,
         bestTimeSec: mine.bests[slot]?.timeSec ?? null,
       })
@@ -249,7 +266,14 @@ export function createMockApi(): CompetitionApi {
 
     async getLeaderboard(joinCode, opts) {
       const info = findClassByCode(joinCode)
-      const entries = (s.board.get(info.classInfo.id) ?? [])
+      return this.getLeaderboardByPath(info.path, opts)
+    },
+
+    async getLeaderboardByPath(c: ClassPath, opts) {
+      const classInfo = s.classes.find((x) => x.id === c.classId)
+      if (!classInfo) throw new Error('CLASS_NOT_FOUND')
+      const entries = (s.board.get(c.classId) ?? [])
+        .filter((e) => e.status !== 'withdrawn')
         .filter((e) => (opts?.includePending ? e.status !== 'rejected' : e.status === 'approved'))
         .sort(compareEntries)
       const ranked = entries.filter((e) => averageSec(e.bests) !== null)
@@ -269,7 +293,8 @@ export function createMockApi(): CompetitionApi {
       })
       // 미제출 참가자
       s.participants
-        .filter((p) => p.classId === info.classInfo.id)
+        .filter((p) => p.classId === c.classId)
+        .filter((p) => p.status !== 'withdrawn')
         .filter((p) => (opts?.includePending ? p.status !== 'rejected' : p.status === 'approved'))
         .filter((p) => !entries.some((e) => e.participantId === p.id))
         .forEach((p) =>
@@ -284,6 +309,32 @@ export function createMockApi(): CompetitionApi {
           }),
         )
       return delay(rows)
+    },
+
+    async withdraw(p: ParticipantPath) {
+      const target = s.participants.find((x) => x.id === p.participantId)
+      if (!target) throw new Error('PARTICIPANT_NOT_FOUND')
+      target.status = 'withdrawn'
+      target.statusHistory.push({ status: 'withdrawn', at: now(), by: target.ownerUid })
+      const e = (s.board.get(p.classId) ?? []).find((x) => x.participantId === p.participantId)
+      if (e) e.status = 'withdrawn'
+      return delay(undefined)
+    },
+
+    async resetJoinCode(c: ClassPath) {
+      requireRole(['teacher', 'admin', 'master'])
+      const target = s.classes.find((x) => x.id === c.classId)
+      if (!target) throw new Error('CLASS_NOT_FOUND')
+      target.joinCode = newJoinCode()
+      return delay(target.joinCode)
+    },
+
+    async setJoinActive(c: ClassPath, active: boolean) {
+      requireRole(['teacher', 'admin', 'master'])
+      const target = s.classes.find((x) => x.id === c.classId)
+      if (!target) throw new Error('CLASS_NOT_FOUND')
+      target.joinActive = active
+      return delay(undefined)
     },
 
     async getMyProgress(p: ParticipantPath) {
@@ -374,7 +425,7 @@ export function createMockApi(): CompetitionApi {
             { slot: 'c2', missionId: 202, name: 'Challenge 2' },
             { slot: 'c3', missionId: 203, name: 'Challenge 3' },
           ],
-        attemptsPerChallenge: input.attemptsPerChallenge ?? 3,
+        attemptsPerChallenge: input.attemptsPerChallenge === undefined ? 3 : input.attemptsPerChallenge,
         visibility: 'code-only',
         scoringVersion: 'v2',
         frozen: false,
@@ -426,6 +477,7 @@ export function createMockApi(): CompetitionApi {
           schoolId: school.id,
           name: row.className.trim(),
           joinCode: newJoinCode(),
+          joinActive: true,
           createdAt: now(),
         })
       }

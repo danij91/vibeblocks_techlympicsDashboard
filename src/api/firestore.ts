@@ -121,6 +121,7 @@ function asClass(snap: QueryDocumentSnapshot<DocumentData> | { id: string; data(
     schoolId: data.schoolId ?? schoolId,
     name: data.name,
     joinCode: data.joinCode,
+    joinActive: data.joinActive ?? true,
     createdAt: toIso(data.createdAt),
   }
 }
@@ -191,6 +192,9 @@ function mapError(error: unknown): never {
 }
 
 async function ensureUser(): Promise<string> {
+  // 새로고침 직후 영속 세션이 비동기 복원 중일 수 있다 — 복원 완료를 기다린 뒤 판단.
+  // (안 기다리면 익명 로그인이 실세션을 덮어쓰는 레이스 — vb-116 세션 유실 사고)
+  await auth.authStateReady()
   if (auth.currentUser) return auth.currentUser.uid
   const credential = await signInAnonymously(auth)
   return credential.user.uid
@@ -419,7 +423,7 @@ export function createFirestoreApi(): CompetitionApi {
 
         const attempts = await readAttempts(path)
         const slotUsed = attempts.filter((attempt) => attempt.slot === slot).length
-        if (slotUsed >= event.attemptsPerChallenge) throw new Error('NO_ATTEMPTS_LEFT')
+        if (event.attemptsPerChallenge !== null && slotUsed >= event.attemptsPerChallenge) throw new Error('NO_ATTEMPTS_LEFT')
         const attemptNo = slotUsed + 1
         const attemptId = `${path.participantId}_${slot}_${attemptNo}`
         await setDoc(doc(attemptsCollection(path), attemptId), {
@@ -457,7 +461,7 @@ export function createFirestoreApi(): CompetitionApi {
         return {
           slot,
           attemptNo,
-          remaining: event.attemptsPerChallenge - attemptNo,
+          remaining: event.attemptsPerChallenge === null ? -1 : event.attemptsPerChallenge - attemptNo,
           isNewBest,
           bestTimeSec,
         }
@@ -724,6 +728,7 @@ export function createFirestoreApi(): CompetitionApi {
             eventId,
             schoolId: school.id,
             name: className,
+            joinActive: true,
             joinCode,
             createdAt: nowIso(),
           }
@@ -889,6 +894,20 @@ export function createFirestoreApi(): CompetitionApi {
       } catch (error) {
         return mapError(error)
       }
+    },
+
+    // ---------- v3 — TODO(vb-116-api-rules-v3): 실구현 + rules ----------
+    async withdraw() {
+      throw new Error('NOT_IMPLEMENTED_V3')
+    },
+    async getLeaderboardByPath() {
+      throw new Error('NOT_IMPLEMENTED_V3')
+    },
+    async resetJoinCode() {
+      throw new Error('NOT_IMPLEMENTED_V3')
+    },
+    async setJoinActive() {
+      throw new Error('NOT_IMPLEMENTED_V3')
     },
 
     async getMyRole() {

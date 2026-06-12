@@ -273,7 +273,7 @@ function EventEditor({ event, onSaved }: { event?: EventDoc; onSaved: (message: 
         name: event.name,
         startsAt: toDateTimeLocal(event.startsAt),
         endsAt: toDateTimeLocal(event.endsAt),
-        attemptsPerChallenge: event.attemptsPerChallenge,
+        attemptsPerChallenge: event.attemptsPerChallenge ?? 3, // v3: null(무제한) UI는 admin-v3 카드가 — 임시 표시값
       })
     }
   }, [event])

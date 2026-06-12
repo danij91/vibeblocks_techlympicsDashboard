@@ -6,7 +6,7 @@
 
 // teacher=교사 / admin=주최측 / master=회사(희용·HQ)
 export type Role = 'teacher' | 'admin' | 'master'
-export type ParticipantStatus = 'pending' | 'approved' | 'rejected' // 가등록/등록/거절
+export type ParticipantStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn' // 가등록/등록/거절/탈퇴(v3 — 기록·시도 보존, 랭킹 제외)
 export type Visibility = 'code-only' | 'public-masked' | 'public' // v1 = code-only 고정
 export type SolveMode = 'ai' | 'block'
 
@@ -39,7 +39,7 @@ export interface EventDoc {
   startsAt: string
   endsAt: string
   challenges: ChallengeDef[] // 3개 고정
-  attemptsPerChallenge: number // 기본 3 — 도전당 공식 시도
+  attemptsPerChallenge: number | null // 도전당 공식 시도 — null = 무제한 (v3)
   visibility: Visibility
   scoringVersion: string // 'v2' = 시간 기반 (최고기록·평균 오름차순)
   frozen: boolean // true = 마감 동결 (제출 차단)
@@ -61,7 +61,8 @@ export interface ClassDoc {
   eventId: string
   schoolId: string
   name: string
-  joinCode: string // 6자 — 학생 참가 + 랭킹 조회 capability
+  joinCode: string // 6자 — 학생 앱 참가 capability (v3: 웹 입력 없음 — QR/앱 전용)
+  joinActive: boolean // false = 신규 참가 차단 (v3 — 기존 참가자·기록은 무관)
   createdAt: string
 }
 

@@ -37,8 +37,10 @@ export interface CompetitionApi {
   resumeParticipant(recoveryCode: string): Promise<ResumeResult>
   /** 도전 슬롯별 공식 기록 제출. 슬롯당 시도 상한·마감은 rules가 강제 — 초과 시 throw */
   submitAttempt(p: ParticipantPath, slot: ChallengeSlot, metrics: AttemptMetrics): Promise<SubmitResult>
-  /** 학급 리더보드 — 도전별 최고기록 + 평균 오름차순 (scoring.compareEntries) */
+  /** 학급 리더보드 — 도전별 최고기록 + 평균 오름차순. 앱(joinCode 기반) 전용 */
   getLeaderboard(joinCode: string, opts?: { includePending?: boolean }): Promise<LeaderboardRow[]>
+  /** v3: 본인 참가 탈퇴 — status→withdrawn (기록·시도 보존, 랭킹 제외). 같은 기기 재가입 시 joinClass가 부활 처리(시도 비충전) */
+  withdraw(p: ParticipantPath): Promise<void>
   /** 본인 참가 현황 (도전별 잔여 시도·최고기록) — 앱 도전 카드용 */
   getMyProgress(p: ParticipantPath): Promise<{ attemptsUsed: Record<ChallengeSlot, number>; bests: Partial<Record<ChallengeSlot, number>> }>
 
@@ -52,6 +54,12 @@ export interface CompetitionApi {
   setParticipantStatus(p: ParticipantPath, status: ParticipantStatus): Promise<void>
   /** 학급 내 모든 pending → approved. 처리 건수 반환 */
   bulkApprove(c: ClassPath): Promise<number>
+  /** v3: 콘솔용 경로 기반 리더보드 (teacher: 학급→랭킹 / admin: 학교→학급→랭킹 — joinCode 비노출) */
+  getLeaderboardByPath(c: ClassPath, opts?: { includePending?: boolean }): Promise<LeaderboardRow[]>
+  /** v3: 학급코드 리셋 — 새 코드 발급, 옛 코드 즉시 무효. 학급·참가자·기록 불변 */
+  resetJoinCode(c: ClassPath): Promise<string>
+  /** v3: 학급코드 활성/비활성 — 비활성 시 신규 참가만 차단 */
+  setJoinActive(c: ClassPath, active: boolean): Promise<void>
 
   // ---------- 주최측 admin (웹 — CONTRACT §5.3) ----------
   listEvents(): Promise<EventDoc[]>
@@ -59,7 +67,7 @@ export interface CompetitionApi {
     name: string
     startsAt: string
     endsAt: string
-    attemptsPerChallenge?: number
+    attemptsPerChallenge?: number | null // null = 무제한
     challenges?: { slot: ChallengeSlot; missionId: number; name: string }[]
   }): Promise<EventDoc>
   updateEvent(
