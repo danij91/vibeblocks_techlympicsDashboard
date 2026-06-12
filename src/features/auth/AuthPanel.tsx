@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
 } from 'firebase/auth'
@@ -14,6 +15,12 @@ type AuthMode = 'sign-in' | 'sign-up'
 const googleProvider = new GoogleAuthProvider()
 
 function errorText(error: unknown): string {
+  const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+  if (code === 'auth/user-not-found') return 'No account was found for that email address.'
+  if (code === 'auth/invalid-email') return 'Enter a valid email address.'
+  if (code === 'auth/too-many-requests') return 'Too many attempts. Wait a moment, then try again.'
+  if (code === 'auth/network-request-failed') return 'Network error. Check your connection and try again.'
+  if (code === 'auth/invalid-credential' || code === 'auth/wrong-password') return 'Email or password is incorrect.'
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -29,6 +36,8 @@ export default function AuthPanel({
   const [selectedMode, setSelectedMode] = useState<AuthMode>(mode ?? 'sign-in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const toast = useToast()
@@ -76,6 +85,24 @@ export default function AuthPanel({
     }
   }
 
+  const resetPassword = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setResetSent(false)
+    try {
+      await sendPasswordResetEmail(auth, email.trim())
+      setResetSent(true)
+      toast('Password reset email sent. Check your inbox.', 'success')
+    } catch (err) {
+      const message = errorText(err)
+      setError(message)
+      toast(message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <section className="auth-panel" aria-label={title}>
       <div className="auth-panel-head">
@@ -113,6 +140,30 @@ export default function AuthPanel({
           {busy ? 'Working...' : authMode === 'sign-up' ? 'Create account' : 'Sign in'}
         </button>
       </form>
+      {authMode === 'sign-in' ? (
+        <div className="auth-reset">
+          <button
+            className="auth-link-button"
+            type="button"
+            onClick={() => {
+              setResetOpen((value) => !value)
+              setResetSent(false)
+              setError('')
+            }}
+          >
+            Forgot password?
+          </button>
+          {resetOpen ? (
+            <form className="auth-form compact" onSubmit={resetPassword}>
+              <p>Enter your account email and we will send a password reset link.</p>
+              <button className="auth-button" type="submit" disabled={busy || !email.trim()}>
+                {busy ? 'Sending...' : 'Send reset email'}
+              </button>
+            </form>
+          ) : null}
+          {resetSent ? <div className="auth-alert success">Password reset email sent. Check your inbox.</div> : null}
+        </div>
+      ) : null}
       {error ? <div className="auth-alert">{error}</div> : null}
     </section>
   )

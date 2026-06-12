@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import type { ReactNode } from 'react'
 import type { User } from 'firebase/auth'
 import { api } from '../../api'
 import { classifyCode, normalizeCode } from '../../api/codes'
@@ -22,11 +23,13 @@ function errorText(error: unknown): string {
 export default function TeacherCodeGate({
   user,
   initialCode = '',
+  entryAside,
   onBound,
   onCancel,
 }: {
   user: User | null
   initialCode?: string
+  entryAside?: ReactNode
   onBound: () => void | Promise<void>
   onCancel?: () => void
 }) {
@@ -99,34 +102,57 @@ export default function TeacherCodeGate({
 
   return (
     <section className="auth-panel" aria-label="Teacher code gate">
-      <div className="auth-steps" aria-label="Teacher onboarding progress">
-        <span className={step === 'code' ? 'active' : ''}>Code</span>
-        <span className={step === 'confirm' ? 'active' : ''}>Confirm</span>
-        <span className={step === 'auth' ? 'active' : ''}>Account</span>
-      </div>
+      {entryAside && step === 'code' ? null : (
+        <div className="auth-steps" aria-label="Teacher onboarding progress">
+          <span className={step === 'code' ? 'active' : ''}>Code</span>
+          <span className={step === 'confirm' ? 'active' : ''}>Confirm</span>
+          <span className={step === 'auth' ? 'active' : ''}>Account</span>
+        </div>
+      )}
 
       {step === 'code' ? (
         <form className="auth-form" onSubmit={validateCode}>
-          <label>
-            Teacher code
-            <input
-              autoFocus
-              value={code}
-              onChange={(event) => setCode(event.target.value.toUpperCase())}
-              placeholder="T-KEDAH234"
-              autoComplete="one-time-code"
-            />
-          </label>
-          <div className="auth-actions">
-            {onCancel ? (
-              <button className="auth-button" type="button" onClick={onCancel}>
-                Cancel
+          {entryAside ? (
+            <div className="home-entry-row">
+              <label className="home-entry-field">
+                Teacher code
+                <input
+                  autoFocus
+                  value={code}
+                  onChange={(event) => setCode(event.target.value.toUpperCase())}
+                  placeholder="T-KEDAH234"
+                  autoComplete="one-time-code"
+                />
+              </label>
+              <button className="auth-button primary" type="submit" disabled={busy || code.trim().length === 0}>
+                {busy ? 'Checking...' : 'Check'}
               </button>
-            ) : null}
-            <button className="auth-button primary" type="submit" disabled={busy || code.trim().length === 0}>
-              {busy ? 'Checking...' : 'Continue'}
-            </button>
-          </div>
+              {entryAside}
+            </div>
+          ) : (
+            <>
+              <label>
+                Teacher code
+                <input
+                  autoFocus
+                  value={code}
+                  onChange={(event) => setCode(event.target.value.toUpperCase())}
+                  placeholder="T-KEDAH234"
+                  autoComplete="one-time-code"
+                />
+              </label>
+              <div className="auth-actions">
+                {onCancel ? (
+                  <button className="auth-button" type="button" onClick={onCancel}>
+                    Cancel
+                  </button>
+                ) : null}
+                <button className="auth-button primary" type="submit" disabled={busy || code.trim().length === 0}>
+                  {busy ? 'Checking...' : 'Continue'}
+                </button>
+              </div>
+            </>
+          )}
         </form>
       ) : null}
 

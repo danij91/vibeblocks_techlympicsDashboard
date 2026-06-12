@@ -92,6 +92,11 @@
   color: #ffffff;
 }
 
+.auth-button.danger {
+  border-color: #b42318;
+  color: #b42318;
+}
+
 .auth-button.google {
   width: 100%;
   border-color: #202a36;
@@ -179,6 +184,33 @@
   color: #1b6b38;
 }
 
+.auth-link-button {
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+}
+
+.auth-reset {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-form.compact {
+  border-top: 1px solid #e4ebf2;
+  padding-top: 10px;
+}
+
+.auth-form.compact p {
+  margin: 0;
+  color: #536273;
+  line-height: 1.45;
+}
+
 .auth-header {
   display: flex;
   align-items: flex-start;
@@ -197,10 +229,22 @@
   gap: 10px;
 }
 
-.home-entry-grid {
+.home-entry-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(220px, 1fr) auto auto auto;
   gap: 10px;
+  align-items: end;
+}
+
+.home-entry-field {
+  min-width: 0;
+}
+
+.home-entry-or {
+  align-self: center;
+  color: #657386;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .role-choice {
@@ -235,9 +279,13 @@
 
 @media (max-width: 860px) {
   .auth-layout,
-  .home-entry-grid,
+  .home-entry-row,
   .role-choice-grid {
     grid-template-columns: 1fr;
+  }
+
+  .home-entry-or {
+    justify-self: center;
   }
 
   .auth-header {

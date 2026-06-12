@@ -10,14 +10,14 @@ import { useAuthSession } from '../features/auth/session'
 import '../features/auth/auth.css'
 import styles from '../features/ranking/publicPages.module.css'
 
-type EntryMode = 'choice' | 'sign-in' | 'teacher'
+type EntryMode = 'teacher' | 'sign-in'
 
 export default function HomePage() {
   const navigate = useNavigate()
   const { user, loading: authLoading, isSignedIn } = useAuthSession()
   const [role, setRole] = useState<RoleDoc | null>(null)
   const [roleLoading, setRoleLoading] = useState(false)
-  const [entryMode, setEntryMode] = useState<EntryMode>('choice')
+  const [entryMode, setEntryMode] = useState<EntryMode>('teacher')
   const [error, setError] = useState<string | null>(null)
 
   const refreshRole = async () => {
@@ -66,39 +66,27 @@ export default function HomePage() {
         <div className="auth-layout">
           <div className="auth-stack">
             {isSignedIn ? <AuthHeader user={user} role={role} label="Techlympics account" onRefresh={refreshRole} /> : null}
-            {!isSignedIn && entryMode === 'choice' ? (
-              <section className="auth-panel">
-                <div className="auth-panel-head">
-                  <p className="auth-eyebrow">Start</p>
-                  <h2>Choose how to continue</h2>
-                </div>
-                <div className="home-entry-grid">
-                  <button className="role-choice" type="button" onClick={() => { setEntryMode('sign-in'); setError(null) }}>
-                    <span>Account</span>
-                    <strong>Sign in</strong>
-                  </button>
-                  <button className="role-choice" type="button" onClick={() => { setEntryMode('teacher'); setError(null) }}>
-                    <span>Teacher code</span>
-                    <strong>I have a teacher code</strong>
-                  </button>
-                </div>
-              </section>
-            ) : null}
-
             {!isSignedIn && entryMode === 'sign-in' ? (
               <AuthPanel title="Sign in" mode="sign-in" onSignedIn={refreshRole} />
             ) : null}
 
-            {!isSignedIn && entryMode !== 'choice' ? (
-              <button className="auth-button" type="button" onClick={() => { setEntryMode('choice'); setError(null) }}>
-                Back
+            {!isSignedIn && entryMode === 'sign-in' ? (
+              <button className="auth-button" type="button" onClick={() => { setEntryMode('teacher'); setError(null) }}>
+                Back to teacher code
               </button>
             ) : null}
 
-            {entryMode === 'teacher' ? (
+            {!isSignedIn && entryMode === 'teacher' ? (
               <TeacherCodeGate
                 user={user}
-                onCancel={() => setEntryMode('choice')}
+                entryAside={
+                  <>
+                    <span className="home-entry-or">or</span>
+                    <button className="auth-button" type="button" onClick={() => { setEntryMode('sign-in'); setError(null) }}>
+                      Sign in
+                    </button>
+                  </>
+                }
                 onBound={async () => {
                   await refreshRole()
                   navigate('/teacher', { replace: true })
@@ -116,8 +104,8 @@ export default function HomePage() {
             <RoleLanding user={user} onRoleChanged={refreshRole} />
           ) : !isSignedIn && entryMode === 'teacher' ? (
             <section className="auth-panel">
-              <p className="auth-eyebrow">Teacher sign-up</p>
-              <h2>Teacher code required</h2>
+              <p className="auth-eyebrow">Teacher entry</p>
+              <h2>Use your teacher code first</h2>
               <p>Enter the teacher code from your event host. Class codes are used in the VibeBlocks app.</p>
             </section>
           ) : !isSignedIn && entryMode === 'sign-in' ? (
