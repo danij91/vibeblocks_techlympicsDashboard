@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { api } from '../../api'
 import type { AdminInviteDoc, Role, RoleDoc } from '../../api/types'
 import { useToast } from '../../lib/toast'
+import AdminDashboard from './AdminDashboard'
 import './admin.css'
 
 type MasterTab = 'users' | 'invites'
+type ConsoleTab = 'master' | 'admin'
 type RoleFilter = Role | 'all'
 type RoleWithProfile = RoleDoc & { name?: string; displayName?: string }
 
@@ -31,6 +32,7 @@ function roleSearchText(role: RoleDoc) {
 
 export default function MasterDashboard() {
   const toast = useToast()
+  const [consoleTab, setConsoleTab] = useState<ConsoleTab>('master')
   const [tab, setTab] = useState<MasterTab>('users')
   const [role, setRole] = useState<RoleDoc | null>(null)
   const [roles, setRoles] = useState<RoleDoc[]>([])
@@ -158,64 +160,80 @@ export default function MasterDashboard() {
       </div>
 
       <nav className="ops-tabs ops-console-switcher" aria-label="Console switcher">
-        <span className="ops-tab active" aria-current="page">Master Console</span>
-        <Link className="ops-tab" to="/admin">Admin Console</Link>
+        <button
+          className={`ops-tab ${consoleTab === 'master' ? 'active' : ''}`}
+          aria-current={consoleTab === 'master' ? 'page' : undefined}
+          onClick={() => setConsoleTab('master')}
+        >
+          Master 기능
+        </button>
+        <button
+          className={`ops-tab ${consoleTab === 'admin' ? 'active' : ''}`}
+          aria-current={consoleTab === 'admin' ? 'page' : undefined}
+          onClick={() => setConsoleTab('admin')}
+        >
+          Admin 콘솔
+        </button>
       </nav>
 
       {error && <div className="ops-alert">{error}</div>}
       {notice && <div className="ops-alert ops-success">{notice}</div>}
 
-      <div className="ops-grid">
-        <section className="ops-stack">
-          <div className="ops-panel">
-            <h2>Current role</h2>
-            {role ? (
-              <p><span className="ops-pill ok">{role.role}</span> <code>{role.uid}</code></p>
-            ) : (
-              <p className="ops-subtle">No role assigned.</p>
-            )}
-          </div>
-        </section>
-
-        <section className="ops-stack">
-          {role?.role === 'master' ? (
+      {consoleTab === 'admin' ? (
+        <AdminDashboard embedded />
+      ) : (
+        <div className="ops-grid">
+          <section className="ops-stack">
             <div className="ops-panel">
-              <div className="ops-tabs">
-                <button className={`ops-tab ${tab === 'users' ? 'active' : ''}`} onClick={() => setTab('users')}>Users</button>
-                <button className={`ops-tab ${tab === 'invites' ? 'active' : ''}`} onClick={() => setTab('invites')}>Invite codes</button>
-              </div>
-
-              {tab === 'users' ? (
-                <UsersTable
-                  query={query}
-                  roleFilter={roleFilter}
-                  roles={filteredRoles}
-                  revokingUid={revokingUid}
-                  onQuery={setQuery}
-                  onRevoke={revoke}
-                  onRoleFilter={setRoleFilter}
-                />
+              <h2>Current role</h2>
+              {role ? (
+                <p><span className="ops-pill ok">{role.role}</span> <code>{role.uid}</code></p>
               ) : (
-                <InvitesPanel
-                  creatingInvite={creatingInvite}
-                  deletingInviteCode={deletingInviteCode}
-                  invite={invite}
-                  invites={invites}
-                  onCopyInvite={copyInvite}
-                  onCreateInvite={createInvite}
-                  onDeleteInvite={deleteInvite}
-                />
+                <p className="ops-subtle">No role assigned.</p>
               )}
             </div>
-          ) : (
-            <div className="ops-panel">
-              <p className="ops-eyebrow">Master required</p>
-              <h2>User management is locked</h2>
-              <p className="ops-subtle">Use a master role to create invites and revoke roles.</p>
-            </div>
-          )}
-        </section>
-      </div>
+          </section>
+
+          <section className="ops-stack">
+            {role?.role === 'master' ? (
+              <div className="ops-panel">
+                <div className="ops-tabs">
+                  <button className={`ops-tab ${tab === 'users' ? 'active' : ''}`} onClick={() => setTab('users')}>Users</button>
+                  <button className={`ops-tab ${tab === 'invites' ? 'active' : ''}`} onClick={() => setTab('invites')}>Invite codes</button>
+                </div>
+
+                {tab === 'users' ? (
+                  <UsersTable
+                    query={query}
+                    roleFilter={roleFilter}
+                    roles={filteredRoles}
+                    revokingUid={revokingUid}
+                    onQuery={setQuery}
+                    onRevoke={revoke}
+                    onRoleFilter={setRoleFilter}
+                  />
+                ) : (
+                  <InvitesPanel
+                    creatingInvite={creatingInvite}
+                    deletingInviteCode={deletingInviteCode}
+                    invite={invite}
+                    invites={invites}
+                    onCopyInvite={copyInvite}
+                    onCreateInvite={createInvite}
+                    onDeleteInvite={deleteInvite}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="ops-panel">
+                <p className="ops-eyebrow">Master required</p>
+                <h2>User management is locked</h2>
+                <p className="ops-subtle">Use a master role to create invites and revoke roles.</p>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
     </section>
   )
 }

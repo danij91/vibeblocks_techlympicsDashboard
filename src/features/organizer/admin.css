@@ -4,6 +4,18 @@
   color: #172033;
 }
 
+.ops-workspace,
+.ops-panel,
+.ops-card,
+.ops-stack {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ops-workspace.embedded {
+  margin-top: 16px;
+}
+
 .ops-topbar {
   display: flex;
   align-items: flex-start;
@@ -69,6 +81,10 @@
   flex-wrap: wrap;
   gap: 8px;
   margin: 12px 0 0;
+}
+
+.ops-console-switcher {
+  margin-bottom: 16px;
 }
 
 .ops-button,
@@ -149,7 +165,10 @@
 }
 
 .ops-table-wrap {
+  max-width: 100%;
   overflow-x: auto;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ops-table {
@@ -168,6 +187,20 @@
   padding: 9px 8px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.ops-table code,
+.ops-panel code,
+.ops-card code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ops-expanded-cell {
+  max-width: 0;
+  padding: 12px 8px 14px;
 }
 
 .ops-table th {
@@ -224,6 +257,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .ops-inline-control {
@@ -353,13 +387,16 @@
   background: #f8fafc;
   border: 1px solid #e3e8ef;
   border-radius: 8px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
   padding: 10px;
 }
 
 .ops-attempt-chip {
   display: inline-block;
   margin-right: 8px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .ops-event-list {
@@ -430,5 +467,34 @@
 
   .ops-topbar {
     display: grid;
+  }
+
+  .ops-filter-bar.participants {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .ops-shell {
+    padding: 12px;
+  }
+
+  .ops-panel,
+  .ops-card {
+    padding: 12px;
+  }
+
+  .ops-table {
+    min-width: 680px;
+  }
+
+  .ops-table.compact {
+    min-width: 560px;
+  }
+
+  .ops-button,
+  .ops-tab {
+    padding-left: 10px;
+    padding-right: 10px;
   }
 }
