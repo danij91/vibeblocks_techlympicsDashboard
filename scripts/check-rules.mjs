@@ -4,6 +4,8 @@ const base = `http://${host}/v1/projects/${projectId}/databases/(default)/docume
 const run = `r${Date.now().toString(36)}`
 const eventId = `e-${run}`
 const frozenEventId = `f-${run}`
+const futureEventId = `future-${run}`
+const unlimitedEventId = `unlimited-${run}`
 
 function jwt(uid) {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
@@ -128,10 +130,21 @@ async function seedFixture() {
     schoolId: 's1',
     name: 'Class',
     joinCode: 'ABC234',
+    joinActive: true,
+    createdAt: startsAt,
+  })
+  await adminWrite(`events/${eventId}/schools/s1/classes/cls-disabled`, {
+    id: 'cls-disabled',
+    eventId,
+    schoolId: 's1',
+    name: 'Disabled Class',
+    joinCode: 'OFF234',
+    joinActive: false,
     createdAt: startsAt,
   })
   await adminWrite(`events/${eventId}/schools/s1/classes/cls1/participants/p1`, participant('p1', 'u1', 'P-2222'))
   await adminWrite(`events/${eventId}/schools/s1/classes/cls1/participants/p2`, participant('p2', 'u2', 'P-3333'))
+  await adminWrite(`events/${eventId}/schools/s1/classes/cls1/participants/p-withdrawn`, participant('p-withdrawn', 'u1', 'P-5555', { status: 'withdrawn' }))
   await adminWrite(`events/${eventId}/schools/s1/teachers/t1`, { code: 'T-GOOD2345', boundAt: startsAt })
   await adminWrite('roles/t1', { role: 'teacher', createdAt: startsAt })
 
@@ -139,6 +152,50 @@ async function seedFixture() {
   await adminWrite(`events/${frozenEventId}/schools/s1/classes/cls1/participants/p1`, {
     ...participant('p1', 'u1', 'P-4444'),
     eventId: frozenEventId,
+  })
+
+  await adminWrite(`events/${futureEventId}`, event({
+    id: futureEventId,
+    startsAt: new Date('2099-01-01T00:00:00.000Z'),
+    endsAt: new Date('2100-01-01T00:00:00.000Z'),
+  }))
+  await adminWrite(`events/${futureEventId}/schools/s1`, {
+    id: 's1',
+    eventId: futureEventId,
+    name: 'Future School',
+    teacherCode: 'T-FUTR2345',
+    createdAt: startsAt,
+  })
+  await adminWrite(`events/${futureEventId}/schools/s1/classes/cls1`, {
+    id: 'cls1',
+    eventId: futureEventId,
+    schoolId: 's1',
+    name: 'Future Class',
+    joinCode: 'FUT234',
+    joinActive: true,
+    createdAt: startsAt,
+  })
+
+  await adminWrite(`events/${unlimitedEventId}`, event({ id: unlimitedEventId, attemptsPerChallenge: null }))
+  await adminWrite(`events/${unlimitedEventId}/schools/s1`, {
+    id: 's1',
+    eventId: unlimitedEventId,
+    name: 'Unlimited School',
+    teacherCode: 'T-UNLM2345',
+    createdAt: startsAt,
+  })
+  await adminWrite(`events/${unlimitedEventId}/schools/s1/classes/cls1`, {
+    id: 'cls1',
+    eventId: unlimitedEventId,
+    schoolId: 's1',
+    name: 'Unlimited Class',
+    joinCode: 'UNL234',
+    joinActive: true,
+    createdAt: startsAt,
+  })
+  await adminWrite(`events/${unlimitedEventId}/schools/s1/classes/cls1/participants/p1`, {
+    ...participant('p1', 'u1', 'P-6666'),
+    eventId: unlimitedEventId,
   })
 
   const c1 = [metrics(201, 50), metrics(201, 45), metrics(201, 47)]
@@ -157,6 +214,14 @@ async function seedFixture() {
     metrics: metrics(203, null, 0.5),
     submittedAt: startsAt,
   })
+  for (let attemptNo = 1; attemptNo <= 3; attemptNo += 1) {
+    await adminWrite(`events/${unlimitedEventId}/schools/s1/classes/cls1/participants/p1/attempts/p1_c1_${attemptNo}`, {
+      slot: 'c1',
+      attemptNo,
+      metrics: metrics(201, 70 - attemptNo),
+      submittedAt: startsAt,
+    })
+  }
 }
 
 async function expectDenied(name, action) {
@@ -202,6 +267,63 @@ async function main() {
       slot: 'c1',
       attemptNo: 1,
       metrics: metrics(201, 50),
+      submittedAt: new Date(),
+    }),
+  )
+
+  await expectDenied('withdrawn participant attempt', () =>
+    request('PATCH', `events/${eventId}/schools/s1/classes/cls1/participants/p-withdrawn/attempts/p-withdrawn_c1_1`, 'u1', {
+      slot: 'c1',
+      attemptNo: 1,
+      metrics: metrics(201, 50),
+      submittedAt: new Date(),
+    }),
+  )
+
+  await expectAllowed('period outside participant join allowed', () =>
+    request('PATCH', `events/${futureEventId}/schools/s1/classes/cls1/participants/p-future`, 'u1', {
+      ...participant('p-future', 'u1', 'P-7777', {
+        eventId: futureEventId,
+        status: 'pending',
+      }),
+    }),
+  )
+
+  await expectDenied('period outside attempt', () =>
+    request('PATCH', `events/${futureEventId}/schools/s1/classes/cls1/participants/p-future/attempts/p-future_c1_1`, 'u1', {
+      slot: 'c1',
+      attemptNo: 1,
+      metrics: metrics(201, 50),
+      submittedAt: new Date(),
+    }),
+  )
+
+  await expectDenied('joinActive false participant join', () =>
+    request('PATCH', `events/${eventId}/schools/s1/classes/cls-disabled/participants/p-disabled`, 'u1', {
+      ...participant('p-disabled', 'u1', 'P-8888', {
+        classId: 'cls-disabled',
+        status: 'pending',
+      }),
+    }),
+  )
+
+  await expectDenied('student changes class joinCode', () =>
+    request('PATCH', `events/${eventId}/schools/s1/classes/cls1`, 'u1', {
+      id: 'cls1',
+      eventId,
+      schoolId: 's1',
+      name: 'Class',
+      joinCode: 'HACK34',
+      joinActive: true,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    }),
+  )
+
+  await expectAllowed('null cap allows 4th attempt', () =>
+    request('PATCH', `events/${unlimitedEventId}/schools/s1/classes/cls1/participants/p1/attempts/p1_c1_4`, 'u1', {
+      slot: 'c1',
+      attemptNo: 4,
+      metrics: metrics(201, 40),
       submittedAt: new Date(),
     }),
   )

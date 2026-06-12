@@ -4,13 +4,16 @@ import {
   Timestamp,
   arrayUnion,
   collection,
+  deleteField,
   deleteDoc,
   doc,
   getDoc,
   getDocs,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -243,8 +246,13 @@ async function getUniqueCode(makeCode: () => string, collectionName: 'joinCodes'
   throw new Error('CODE_GENERATION_FAILED')
 }
 
-function eventIsClosed(event: EventDoc): boolean {
-  return event.frozen || Date.now() >= new Date(event.endsAt).getTime()
+function eventIsFrozen(event: EventDoc): boolean {
+  return event.frozen
+}
+
+function eventIsOutsideAttemptWindow(event: EventDoc): boolean {
+  const now = Date.now()
+  return now < new Date(event.startsAt).getTime() || now > new Date(event.endsAt).getTime()
 }
 
 function emptyUsed(): Record<ChallengeSlot, number> {
@@ -322,6 +330,46 @@ export function createFirestoreApi(): CompetitionApi {
     return snaps.docs.map((snap) => asParticipant(snap, path))
   }
 
+  async function readMyParticipants(path: ClassPath, uid: string): Promise<ParticipantDoc[]> {
+    const snaps = await getDocs(
+      query(collection(db, 'events', path.eventId, 'schools', path.schoolId, 'classes', path.classId, 'participants'), where('ownerUid', '==', uid)),
+    )
+    return snaps.docs.map((snap) => asParticipant(snap, path))
+  }
+
+  async function assertClassConsoleAccess(path: ClassPath): Promise<void> {
+    const uid = await ensureUser()
+    const roleSnap = await getDoc(doc(db, 'roles', uid))
+    if (roleSnap.exists()) {
+      const role = (roleSnap.data() as RoleWithSchools).role
+      if (role === 'admin' || role === 'master') return
+    }
+    const teacherSnap = await getDoc(doc(db, 'events', path.eventId, 'schools', path.schoolId, 'teachers', uid))
+    if (teacherSnap.exists()) return
+    throw new Error('FORBIDDEN')
+  }
+
+  async function readLeaderboardForClass(path: ClassPath, opts?: { includePending?: boolean }): Promise<LeaderboardRow[]> {
+    const snaps = await getDocs(collection(db, 'events', path.eventId, 'schools', path.schoolId, 'classes', path.classId, 'board'))
+    const entries = snaps.docs
+      .map(asBoardEntry)
+      .filter((entry) => (opts?.includePending ? entry.status !== 'rejected' && entry.status !== 'withdrawn' : entry.status === 'approved'))
+      .sort(compareEntries)
+    const ranked = entries.filter((entry) => averageSec(entry.bests) !== null)
+    return entries.map<LeaderboardRow>((entry) => {
+      const avg = averageSec(entry.bests)
+      return {
+        rank: avg === null ? null : ranked.indexOf(entry) + 1,
+        publicId: entry.publicId,
+        name: entry.name,
+        status: entry.status,
+        bests: publicBests(entry.bests),
+        averageSec: avg,
+        attemptsUsed: attemptsUsedFromBests(entry.bests),
+      }
+    })
+  }
+
   async function statusPatch(path: ParticipantPath, status: ParticipantStatus): Promise<void> {
     const uid = await ensureUser()
     const participant = await readParticipant(path)
@@ -347,7 +395,37 @@ export function createFirestoreApi(): CompetitionApi {
       try {
         const uid = await ensureUser()
         const info = await readJoinInfo(joinCode)
-        if (eventIsClosed(info.event)) throw new Error('EVENT_FROZEN')
+        if (eventIsFrozen(info.event)) throw new Error('EVENT_FROZEN')
+
+        const myParticipants = await readMyParticipants(info.path, uid)
+        const withdrawn = myParticipants.find((participant) => participant.status === 'withdrawn')
+        if (withdrawn) {
+          const nextParticipant: ParticipantDoc = {
+            ...withdrawn,
+            name: profile.name.trim(),
+            grade: profile.grade?.trim() || undefined,
+            status: 'pending',
+            statusHistory: [...withdrawn.statusHistory, { status: 'pending', at: nowIso(), by: uid }],
+          }
+          const batch = writeBatch(db)
+          batch.update(participantRef({ ...info.path, participantId: withdrawn.id }), {
+            name: nextParticipant.name,
+            grade: nextParticipant.grade ?? deleteField(),
+            status: nextParticipant.status,
+            statusHistory: nextParticipant.statusHistory.map((x) => ({ ...x, at: toTimestamp(x.at) })),
+          })
+          const boardSnap = await getDoc(boardRef({ ...info.path, participantId: withdrawn.id }))
+          if (boardSnap.exists()) {
+            batch.update(boardRef({ ...info.path, participantId: withdrawn.id }), {
+              name: nextParticipant.name,
+              status: nextParticipant.status,
+            })
+          }
+          await batch.commit()
+          return { ...info, participant: nextParticipant, recoveryCode: '' }
+        }
+
+        if (!info.classInfo.joinActive) throw new Error('JOIN_DISABLED')
 
         const recoveryCode = newRecoveryCode()
         const recoveryHash = await sha256Hex(recoveryCode)
@@ -418,8 +496,10 @@ export function createFirestoreApi(): CompetitionApi {
         if (!eventSnap.exists()) throw new Error('EVENT_NOT_FOUND')
         const event = asEvent(eventSnap)
         if (participant.ownerUid !== uid) throw new Error('FORBIDDEN')
+        if (participant.status === 'withdrawn') throw new Error('WITHDRAWN')
         if (participant.status === 'rejected') throw new Error('REJECTED')
-        if (eventIsClosed(event)) throw new Error('EVENT_FROZEN')
+        if (eventIsFrozen(event)) throw new Error('EVENT_FROZEN')
+        if (eventIsOutsideAttemptWindow(event)) throw new Error('EVENT_NOT_OPEN')
 
         const attempts = await readAttempts(path)
         const slotUsed = attempts.filter((attempt) => attempt.slot === slot).length
@@ -473,24 +553,7 @@ export function createFirestoreApi(): CompetitionApi {
     async getLeaderboard(joinCode, opts) {
       try {
         const info = await readJoinInfo(joinCode)
-        const snaps = await getDocs(collection(db, 'events', info.path.eventId, 'schools', info.path.schoolId, 'classes', info.path.classId, 'board'))
-        const entries = snaps.docs
-          .map(asBoardEntry)
-          .filter((entry) => (opts?.includePending ? entry.status !== 'rejected' : entry.status === 'approved'))
-          .sort(compareEntries)
-        const ranked = entries.filter((entry) => averageSec(entry.bests) !== null)
-        return entries.map<LeaderboardRow>((entry) => {
-          const avg = averageSec(entry.bests)
-          return {
-            rank: avg === null ? null : ranked.indexOf(entry) + 1,
-            publicId: entry.publicId,
-            name: entry.name,
-            status: entry.status,
-            bests: publicBests(entry.bests),
-            averageSec: avg,
-            attemptsUsed: attemptsUsedFromBests(entry.bests),
-          }
-        })
+        return await readLeaderboardForClass(info.path, opts)
       } catch (error) {
         return mapError(error)
       }
@@ -896,18 +959,69 @@ export function createFirestoreApi(): CompetitionApi {
       }
     },
 
-    // ---------- v3 — TODO(vb-116-api-rules-v3): 실구현 + rules ----------
-    async withdraw() {
-      throw new Error('NOT_IMPLEMENTED_V3')
+    async withdraw(path) {
+      try {
+        const uid = await ensureUser()
+        const participant = await readParticipant(path)
+        if (participant.ownerUid !== uid) throw new Error('FORBIDDEN')
+        if (participant.status === 'withdrawn') return
+        if (participant.status === 'rejected') throw new Error('REJECTED')
+        const nextHistory = [...participant.statusHistory, { status: 'withdrawn' as ParticipantStatus, at: nowIso(), by: uid }]
+        const batch = writeBatch(db)
+        batch.update(participantRef(path), {
+          status: 'withdrawn',
+          statusHistory: nextHistory.map((x) => ({ ...x, at: toTimestamp(x.at) })),
+        })
+        const boardSnap = await getDoc(boardRef(path))
+        if (boardSnap.exists()) batch.update(boardRef(path), { status: 'withdrawn' })
+        await batch.commit()
+      } catch (error) {
+        return mapError(error)
+      }
     },
-    async getLeaderboardByPath() {
-      throw new Error('NOT_IMPLEMENTED_V3')
+    async getLeaderboardByPath(path, opts) {
+      try {
+        await assertClassConsoleAccess(path)
+        return await readLeaderboardForClass(path, opts)
+      } catch (error) {
+        return mapError(error)
+      }
     },
-    async resetJoinCode() {
-      throw new Error('NOT_IMPLEMENTED_V3')
+    async resetJoinCode(path) {
+      try {
+        await ensureUser()
+        const [classSnap, schoolSnap] = await Promise.all([getDoc(classRef(path)), getDoc(schoolRef(path))])
+        if (!classSnap.exists()) throw new Error('CLASS_NOT_FOUND')
+        if (!schoolSnap.exists()) throw new Error('SCHOOL_NOT_FOUND')
+        const classInfo = asClass(classSnap, path.eventId, path.schoolId)
+        const school = asSchool(schoolSnap, path.eventId)
+        const nextCode = await getUniqueCode(newJoinCode, 'joinCodes')
+        const batch = writeBatch(db)
+        batch.set(doc(db, 'joinCodes', nextCode), clean({
+          eventId: path.eventId,
+          schoolId: path.schoolId,
+          classId: path.classId,
+          schoolName: school.name,
+          className: classInfo.name,
+          state: school.state,
+          zone: school.zone,
+          createdAt: serverTimestamp(),
+        }))
+        batch.update(classRef(path), { joinCode: nextCode })
+        if (classInfo.joinCode) batch.delete(doc(db, 'joinCodes', classInfo.joinCode))
+        await batch.commit()
+        return nextCode
+      } catch (error) {
+        return mapError(error)
+      }
     },
-    async setJoinActive() {
-      throw new Error('NOT_IMPLEMENTED_V3')
+    async setJoinActive(path, active) {
+      try {
+        await ensureUser()
+        await updateDoc(classRef(path), { joinActive: active })
+      } catch (error) {
+        return mapError(error)
+      }
     },
 
     async getMyRole() {

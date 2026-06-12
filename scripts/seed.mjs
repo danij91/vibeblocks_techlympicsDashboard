@@ -146,6 +146,7 @@ async function seed() {
         schoolId: schoolRef.id,
         name: className,
         joinCode,
+        joinActive: true,
         createdAt: serverTimestamp(),
       })
       batch.set(doc(db, 'joinCodes', joinCode), {
