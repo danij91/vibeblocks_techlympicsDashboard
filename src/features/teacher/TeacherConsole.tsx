@@ -565,6 +565,8 @@ function ClassCard({
   const [qrOpen, setQrOpen] = useState(false)
   const [busyAction, setBusyAction] = useState<'reset' | 'toggle' | ''>('')
   const url = joinUrl(classInfo.joinCode)
+  const grade = classGrade(classInfo.name)
+  const gradeText = grade === 'other' ? null : `Grade ${grade}`
 
   const resetCode = async () => {
     if (!window.confirm('Reset this class code? The old code becomes invalid immediately.')) return
@@ -606,7 +608,10 @@ function ClassCard({
   return (
     <article className={`class-card ${selected ? 'selected' : ''}`}>
       <button className="class-card-select" type="button" onClick={onSelect} aria-pressed={selected}>
-        <span>{classInfo.name}</span>
+        <span className="class-card-title">
+          <span>{classInfo.name}</span>
+          {gradeText ? <span className="class-grade-chip">{gradeText}</span> : null}
+        </span>
         <strong>
           <ShimmerText busy={busyAction !== ''}>{classInfo.joinCode}</ShimmerText>
         </strong>
@@ -619,16 +624,16 @@ function ClassCard({
       </button>
       <div className="row-actions compact">
         <button className="secondary" type="button" onClick={copyClassCode}>
-          Copy code
+          Copy
         </button>
         <button className="secondary" type="button" onClick={onViewRanking}>
-          View ranking
+          Ranking
         </button>
         <button className="secondary" type="button" onClick={toggleActive} disabled={busyAction === 'toggle'}>
           {busyAction === 'toggle' ? 'Saving...' : classInfo.joinActive ? 'Disable' : 'Enable'}
         </button>
         <button className="danger" type="button" onClick={resetCode} disabled={busyAction === 'reset'}>
-          {busyAction === 'reset' ? 'Resetting...' : 'Reset code'}
+          {busyAction === 'reset' ? 'Resetting...' : 'Reset'}
         </button>
       </div>
       {qrOpen ? (
@@ -899,7 +904,7 @@ function RankingSummary({ rows, loading, onOpen }: { rows: LeaderboardRow[]; loa
         <strong>{pendingRows}</strong>
         <span>pending included</span>
         <button className="secondary" type="button" onClick={onOpen}>
-          View ranking
+          Ranking
         </button>
       </div>
     </section>
@@ -1275,8 +1280,27 @@ select {
   padding: 0;
   text-align: left;
 }
-.class-card-select span {
+.class-card-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.class-card-title > span:first-child {
   font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.class-grade-chip {
+  border: 1px solid #c9d8ff;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #1746ad;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 5px 7px;
+  text-transform: uppercase;
 }
 .class-card-select strong,
 .print-code {

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { formatSec } from '../../api/scoring'
 import type { ChallengeDef, ChallengeSlot, LeaderboardRow } from '../../api/types'
 import styles from './publicPages.module.css'
@@ -44,6 +45,10 @@ function sortedRows(rows: LeaderboardRow[]): LeaderboardRow[] {
     .map(({ row }) => row)
 }
 
+function rankLabel(row: LeaderboardRow): string | number {
+  return row.completedCount > 0 ? row.rank ?? '-' : '-'
+}
+
 export default function LeaderboardTable({
   rows,
   challenges = FALLBACK_CHALLENGES,
@@ -53,6 +58,7 @@ export default function LeaderboardTable({
   challenges?: ChallengeDef[]
   attemptsPerChallenge?: number | null
 }) {
+  const [expandedPublicId, setExpandedPublicId] = useState<string | null>(null)
   const visibleRows = sortedRows(rows)
   const maxAttempts = maxAttemptsLabel(attemptsPerChallenge, challenges.length)
 
@@ -62,6 +68,48 @@ export default function LeaderboardTable({
 
   return (
     <div className={styles.tableWrap}>
+      <div className={styles.mobileLeaderboard} aria-label="Compact ranking">
+        {visibleRows.map((row) => {
+          const expanded = expandedPublicId === row.publicId
+          return (
+            <article key={row.publicId} className={`${styles.mobileRowCard} ${row.completedCount === 0 ? styles.mobileUnranked : ''}`}>
+              <button
+                className={styles.mobileRowButton}
+                type="button"
+                aria-expanded={expanded}
+                onClick={() => setExpandedPublicId(expanded ? null : row.publicId)}
+              >
+                <span className={styles.mobileRank}>{rankLabel(row)}</span>
+                <span className={styles.mobileIdentity}>
+                  <span className={styles.mobileName}>{row.name}</span>
+                  <span className={styles.mobilePublicId}>{row.publicId}</span>
+                </span>
+                <span className={styles.mobileProgress}>{row.completedCount}/{challenges.length}</span>
+                <span className={styles.mobileAverage}>{formatSec(row.averageSec)}</span>
+              </button>
+              {expanded ? (
+                <div className={styles.mobileDetails}>
+                  {challenges.map((challenge) => (
+                    <div key={challenge.slot} className={styles.mobileDetailRow}>
+                      <span>{challenge.name}</span>
+                      <strong>{formatSec(row.bests[challenge.slot])}</strong>
+                      <em>
+                        {row.attemptsUsed[challenge.slot]}/{slotLimitLabel(attemptsPerChallenge)} attempts
+                      </em>
+                    </div>
+                  ))}
+                  <div className={styles.mobileAttemptTotal}>
+                    <span>Total attempts</span>
+                    <strong>
+                      {totalAttempts(row)}/{maxAttempts}
+                    </strong>
+                  </div>
+                </div>
+              ) : null}
+            </article>
+          )
+        })}
+      </div>
       <table className={styles.boardTable}>
         <thead>
           <tr>
@@ -80,7 +128,7 @@ export default function LeaderboardTable({
             <tr key={row.publicId} className={row.completedCount === 0 ? styles.unrankedRow : undefined}>
               <td className={styles.rankCell}>
                 <span className={styles.cellLabel}>Rank</span>
-                <span className={styles.cellValue}>{row.completedCount > 0 ? row.rank ?? '-' : '-'}</span>
+                <span className={styles.cellValue}>{rankLabel(row)}</span>
               </td>
               <td className={styles.participantCell}>
                 <span className={styles.nameCell}>{row.name}</span>
