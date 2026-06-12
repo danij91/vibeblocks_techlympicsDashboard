@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/techlympics/:path*", "destination": "/:path*" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
