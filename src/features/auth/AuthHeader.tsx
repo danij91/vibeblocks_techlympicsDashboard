@@ -19,7 +19,6 @@ function accountDeleteErrorText(error: unknown): string {
 
 export default function AuthHeader({
   user,
-  role,
   label,
   onRefresh,
 }: {
@@ -75,7 +74,6 @@ export default function AuthHeader({
           <strong>{userLabel(user)}</strong>
         </div>
         <div className="auth-header-actions">
-          <span className={`auth-role ${role?.role ?? 'none'}`}>{role?.role ?? 'no role'}</span>
           {onRefresh ? (
             <button className="auth-button" type="button" onClick={() => void onRefresh()} disabled={busy}>
               Refresh
