@@ -1,8 +1,18 @@
-# vb-116 공유 계약 (CONTRACT) — v2 (2026-06-11 개정)
+# vb-116 공유 계약 (CONTRACT) — v3 (2026-06-12 개정)
 
 > **이 문서가 모든 task의 단일 진실원.** 여기 어긋나는 구현이 버그다.
 > 기획 원문: HQ `_ops/projects/vb-116-fc1-competition-platform.md`
-> v2 변경: 역할 재정립(teacher/admin/master) · 3도전 시간 랭킹 · 진입 구조(로그인 첫화면) · EN+BM.
+> v2 변경: 역할 재정립(teacher/admin/master) · 3도전 시간 랭킹 · EN+BM.
+>
+> **v3 (2026-06-12) 변경:**
+> ① **웹에서 학급코드 입력 없음** — 랭킹은 콘솔 전용 (teacher: 학급→랭킹 / admin: 학교→학급→랭킹, `getLeaderboardByPath`). 공개 랭킹 `/r` 제거, `/join`은 앱 안내 랜딩만. **"school code"라는 표현·개념 금지** — teacher code로 통일.
+> ② 첫화면 = **로그인/가입 선택 분기**. 가입은 교사코드 게이트 통과 후에만 — 코드 입력 후 화면엔 가입 UI만(sign in 금지).
+> ③ `withdrawn` 상태 — 탈퇴(기록·시도 보존, 랭킹·보드 제외). `joinClass`가 같은 ownerUid 기존 참가를 부활 처리(시도 비충전).
+> ④ `attemptsPerChallenge: null` = 무제한.
+> ⑤ 시도는 이벤트 기간 `[startsAt, endsAt]` 내에만 (`EVENT_NOT_OPEN`) — **참가(join)는 기간 무관**, frozen만 차단.
+> ⑥ joinCode 리셋/비활성 (`resetJoinCode`/`setJoinActive`) — 학급·참가자·기록 불변, 옛 코드 즉시 무효 / 비활성은 신규 참가만 차단(`JOIN_DISABLED`).
+> ⑦ admin 콘솔에 joinCode **비노출** (교사·학생 영역). admin은 교사코드 발급·전달만.
+> ⑧ 공용 토스트 `src/lib/toast.tsx`(Claude 소유) — 상태 변경 액션은 토스트 피드백 필수.
 
 ## §0. 변경 규칙
 
@@ -78,7 +88,7 @@ roles/{uid}                           {role: teacher|admin|master, ...}
 |---|---|---|
 | `/` (로그인+코드 진입), 역할 리다이렉트, 역할없음 랜딩(교사코드/초대코드/랭킹 3택), 로그아웃 헤더 | `pages/HomePage.tsx` `pages/AdminConsolePage.tsx` `pages/MasterConsolePage.tsx` `features/auth/**` `features/organizer/**` | vb-116-web-entry-auth |
 | `/r/:joinCode` `/join/:joinCode` — 도전별 컬럼+평균 랭킹 | `pages/RankingPage.tsx` `features/ranking/**` | vb-116-web-ranking-v2 |
-| (api·rules·시드 v2) | `src/api/firestore.ts`(신규 — `.v1bak` 참고) `firestore.rules` `firestore.indexes.json` `scripts/**` | vb-116-api-rules-v2 |
+| (api·rules·시드 v3) | `src/api/firestore.ts`(v3 스텁 4종 실구현 + 기간·무제한·withdrawn·joinActive) `firestore.rules` `firestore.indexes.json` `scripts/**` | vb-116-api-rules-v3 |
 | `/teacher/*` | (v2 run에서 동결 — 임시 호환 패치 상태 유지) | — |
 
 공용(App.tsx·lib/·index.css·package.json) = Claude 소유. 제공 deps: react-router-dom, firebase, qrcode.react, xlsx.
