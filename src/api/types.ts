@@ -174,7 +174,7 @@ export interface TeacherSchoolView {
 
 export interface ImportRow {
   schoolName: string
-  className: string
+  className?: string // v5: 벌크 업로드 = 학교 전용 (반은 개별 추가) — 없으면 학교만 생성
   state?: string
   zone?: string
 }

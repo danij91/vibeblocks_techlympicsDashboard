@@ -499,7 +499,7 @@ export function createMockApi(): CompetitionApi {
       const classes: ClassDoc[] = []
       const skipped: { row: ImportRow; reason: string }[] = []
       for (const row of rows) {
-        if (!row.schoolName?.trim() || !row.className?.trim()) {
+        if (!row.schoolName?.trim()) {
           skipped.push({ row, reason: 'EMPTY_FIELD' })
           continue
         }
@@ -516,7 +516,8 @@ export function createMockApi(): CompetitionApi {
           }
           schools.push(school)
         }
-        const dup = [...s.classes, ...classes].some((x) => x.schoolId === school!.id && x.name === row.className.trim())
+        if (!row.className?.trim()) continue // 학교 전용 행
+        const dup = [...s.classes, ...classes].some((x) => x.schoolId === school!.id && x.name === row.className!.trim())
         if (dup) {
           skipped.push({ row, reason: 'DUPLICATE_CLASS' })
           continue
@@ -525,7 +526,7 @@ export function createMockApi(): CompetitionApi {
           id: `cls-${Math.random().toString(36).slice(2, 8)}`,
           eventId,
           schoolId: school.id,
-          name: row.className.trim(),
+          name: row.className!.trim(),
           joinCode: newJoinCode(),
           joinActive: true,
           createdAt: now(),

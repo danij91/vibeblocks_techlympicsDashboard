@@ -5,3 +5,8 @@ body {
   color: #1a1a2e;
   background: #f7f8fc;
 }
+
+@keyframes vb-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

@@ -125,7 +125,7 @@ function buildPreview(rows: string[][], mapping: Record<ImportField, string>, se
     requiredFields.forEach((field) => {
       if (!mapped[field]?.trim()) warnings.push(`${fieldLabels[field]} empty`)
     })
-    const dupKey = `${mapped.schoolName.toLowerCase()}::${mapped.className.toLowerCase()}`
+    const dupKey = `${mapped.schoolName.toLowerCase()}::${(mapped.className ?? '').toLowerCase()}`
     if (mapped.schoolName && mapped.className) {
       const first = seen.get(dupKey)
       if (first !== undefined) warnings.push(`Duplicate of row ${first + 2}`)
@@ -163,7 +163,7 @@ function downloadSampleWorkbook() {
 function downloadResultWorkbook(rows: PreviewRow[], schools: AdminSchoolView[]) {
   const output = rows.map((row) => {
     const school = schools.find((item) => item.school.name.toLowerCase() === row.mapped.schoolName.toLowerCase())
-    const classInfo = school?.classes.find((item) => item.classInfo.name.toLowerCase() === row.mapped.className.toLowerCase())
+    const classInfo = school?.classes.find((item) => item.classInfo.name.toLowerCase() === (row.mapped.className ?? '').toLowerCase())
     return {
       ...row.source,
       schoolName: row.mapped.schoolName,

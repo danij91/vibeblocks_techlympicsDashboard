@@ -772,7 +772,7 @@ export function createFirestoreApi(): CompetitionApi {
         for (const row of rows) {
           const schoolName = row.schoolName?.trim()
           const className = row.className?.trim()
-          if (!schoolName || !className) {
+          if (!schoolName) {
             skipped.push({ row, reason: 'EMPTY_FIELD' })
             continue
           }
@@ -802,6 +802,10 @@ export function createFirestoreApi(): CompetitionApi {
             }))
           }
 
+          if (!className) {
+            touchedSchools.set(school.id, school)
+            continue // v5: 학교 전용 행 — 반은 개별 추가
+          }
           const classSnaps = await getDocs(collection(db, 'events', eventId, 'schools', school.id, 'classes'))
           const duplicateClass =
             classSnaps.docs.some((snap) => String(snap.data().name).trim() === className) ||
