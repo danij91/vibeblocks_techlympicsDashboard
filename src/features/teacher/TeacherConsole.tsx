@@ -1,44 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
-import {
-  GoogleAuthProvider,
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  signOut,
-} from 'firebase/auth'
-import type { User } from 'firebase/auth'
 import { api } from '../../api'
 import type {
+  ChallengeDef,
   ClassDoc,
   ClassPath,
-  EventDoc,
   LeaderboardRow,
   ParticipantDoc,
   ParticipantPath,
   ParticipantStatus,
-  SchoolDoc,
+  RoleDoc,
   TeacherSchoolView,
 } from '../../api/types'
-import { normalizeCode } from '../../api/codes'
-import { auth } from '../../lib/firebase'
+import AuthHeader from '../auth/AuthHeader'
+import TeacherCodeGate from '../auth/TeacherCodeGate'
+import { useAuthSession } from '../auth/session'
+import '../auth/auth.css'
+import LeaderboardTable from '../ranking/LeaderboardTable'
+import { useToast } from '../../lib/toast'
 
-type GateStep = 'code' | 'confirm' | 'auth'
-type AuthMode = 'sign-in' | 'sign-up'
-type ValidatedTeacherCode = {
-  code: string
-  event: EventDoc
-  school: Pick<SchoolDoc, 'id' | 'name'>
-}
 type ActiveClass = {
   school: TeacherSchoolView
   classInfo: ClassDoc
 }
-type Notice = { kind: 'info' | 'error' | 'success'; text: string } | null
-
-const googleProvider = new GoogleAuthProvider()
+type WorkspaceMode = 'participants' | 'ranking'
 
 function classPath(classInfo: ClassDoc): ClassPath {
   return {
@@ -69,6 +55,7 @@ function formatDate(value: string): string {
 function statusLabel(status: ParticipantStatus): string {
   if (status === 'approved') return 'Approved'
   if (status === 'rejected') return 'Rejected'
+  if (status === 'withdrawn') return 'Withdrawn'
   return 'Pending'
 }
 
@@ -83,17 +70,36 @@ function joinUrl(joinCode: string): string {
 }
 
 export default function TeacherConsole() {
-  const [user, setUser] = useState<User | null>(auth.currentUser)
+  const navigate = useNavigate()
+  const toast = useToast()
+  const { user, loading: authLoading, isSignedIn } = useAuthSession()
+  const [role, setRole] = useState<RoleDoc | null>(null)
   const [schools, setSchools] = useState<TeacherSchoolView[]>([])
   const [selectedSchoolId, setSelectedSchoolId] = useState<string>('')
   const [selectedClassId, setSelectedClassId] = useState<string>('')
-  const [loadingSchools, setLoadingSchools] = useState(true)
-  const [notice, setNotice] = useState<Notice>(null)
+  const [loadingSchools, setLoadingSchools] = useState(false)
+  const [roleLoading, setRoleLoading] = useState(false)
+  const [notice, setNotice] = useState('')
   const [showGate, setShowGate] = useState(false)
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('participants')
 
-  useEffect(() => onAuthStateChanged(auth, setUser), [])
+  const refreshRole = useCallback(async () => {
+    if (!isSignedIn) {
+      setRole(null)
+      return
+    }
+    setRoleLoading(true)
+    try {
+      setRole(await api.getMyRole())
+    } catch (error) {
+      toast(errorText(error), 'error')
+    } finally {
+      setRoleLoading(false)
+    }
+  }, [isSignedIn, toast])
 
-  const refreshSchools = async () => {
+  const refreshSchools = useCallback(async () => {
+    if (!isSignedIn) return
     setLoadingSchools(true)
     try {
       const nextSchools = await api.listMySchools()
@@ -107,19 +113,25 @@ export default function TeacherConsole() {
         return nextSchools[0]?.classes[0]?.id ?? ''
       })
       setShowGate(nextSchools.length === 0)
-      setNotice(null)
+      setNotice(nextSchools.length === 0 ? 'Add your first school with a teacher code.' : '')
     } catch (error) {
       setSchools([])
       setShowGate(true)
-      setNotice({ kind: 'info', text: errorText(error) === 'FORBIDDEN' ? 'Teacher code required.' : errorText(error) })
+      setNotice(errorText(error) === 'FORBIDDEN' ? 'Teacher code required.' : errorText(error))
     } finally {
       setLoadingSchools(false)
     }
-  }
+  }, [isSignedIn])
 
   useEffect(() => {
+    if (authLoading) return
+    if (!isSignedIn) {
+      navigate('/', { replace: true })
+      return
+    }
+    void refreshRole()
     void refreshSchools()
-  }, [])
+  }, [authLoading, isSignedIn, navigate, refreshRole, refreshSchools, user?.uid])
 
   const activeSchool = useMemo(
     () => schools.find((view) => view.school.id === selectedSchoolId) ?? schools[0],
@@ -132,50 +144,54 @@ export default function TeacherConsole() {
   }, [activeSchool, selectedClassId])
 
   const handleBound = async () => {
+    await refreshRole()
     await refreshSchools()
     setShowGate(false)
-    setNotice({ kind: 'success', text: 'School added.' })
+    setNotice('')
+    toast('School added.', 'success')
   }
 
-  const handleSignOut = async () => {
-    await signOut(auth)
-    setUser(null)
-    setSchools([])
-    setShowGate(true)
-    setNotice({ kind: 'info', text: 'Signed out.' })
+  const refreshAll = async () => {
+    await Promise.all([refreshRole(), refreshSchools()])
+  }
+
+  if (authLoading || !isSignedIn) {
+    return (
+      <main className="teacher-page">
+        <style>{teacherStyles}</style>
+        <section className="teacher-shell" aria-label="Teacher dashboard">
+          <div className="panel muted">Redirecting to sign in...</div>
+        </section>
+      </main>
+    )
   }
 
   return (
     <main className="teacher-page">
       <style>{teacherStyles}</style>
       <section className="teacher-shell" aria-label="Teacher dashboard">
+        <AuthHeader user={user} role={role} label="Teacher Console" onRefresh={refreshAll} />
         <header className="teacher-topbar">
           <div>
             <p className="teacher-kicker">Techlympics 2026</p>
             <h1>Teacher Console</h1>
           </div>
           <div className="teacher-actions">
-            {user ? <span className="teacher-user">{user.email ?? 'Signed in'}</span> : null}
             {schools.length > 0 ? (
               <button className="secondary" type="button" onClick={() => setShowGate(true)}>
                 Add school
               </button>
             ) : null}
-            {user ? (
-              <button className="ghost" type="button" onClick={handleSignOut}>
-                Sign out
-              </button>
-            ) : null}
           </div>
         </header>
 
-        {notice ? <div className={`notice ${notice.kind}`}>{notice.text}</div> : null}
+        {notice ? <div className="notice info">{notice}</div> : null}
 
         {showGate || schools.length === 0 ? (
-          <TeacherGate user={user} onBound={handleBound} onCancel={schools.length > 0 ? () => setShowGate(false) : undefined} />
+          <TeacherCodeGate user={user} onBound={handleBound} onCancel={schools.length > 0 ? () => setShowGate(false) : undefined} />
         ) : null}
 
-        {loadingSchools ? <div className="panel muted">Loading teacher schools...</div> : null}
+        {loadingSchools || roleLoading ? <div className="panel muted">Loading teacher schools...</div> : null}
 
         {!showGate && schools.length > 0 && activeSchool ? (
           <Dashboard
@@ -187,192 +203,19 @@ export default function TeacherConsole() {
               const nextSchool = schools.find((view) => view.school.id === schoolId)
               setSelectedSchoolId(schoolId)
               setSelectedClassId(nextSchool?.classes[0]?.id ?? '')
+              setWorkspaceMode('participants')
             }}
-            onSelectClass={setSelectedClassId}
+            onSelectClass={(classId) => {
+              setSelectedClassId(classId)
+              setWorkspaceMode('participants')
+            }}
+            workspaceMode={workspaceMode}
+            onWorkspaceMode={setWorkspaceMode}
             onClassChanged={refreshSchools}
           />
         ) : null}
       </section>
     </main>
-  )
-}
-
-function TeacherGate({
-  user,
-  onBound,
-  onCancel,
-}: {
-  user: User | null
-  onBound: () => Promise<void>
-  onCancel?: () => void
-}) {
-  const [step, setStep] = useState<GateStep>('code')
-  const [code, setCode] = useState('')
-  const [validated, setValidated] = useState<ValidatedTeacherCode | null>(null)
-  const [authMode, setAuthMode] = useState<AuthMode>(user ? 'sign-in' : 'sign-up')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  const validateCode = async (event: FormEvent) => {
-    event.preventDefault()
-    setBusy(true)
-    setError('')
-    try {
-      const normalized = normalizeCode(code)
-      const result = await api.validateTeacherCode(normalized)
-      setValidated({ code: normalized, ...result })
-      setStep('confirm')
-    } catch (err) {
-      setError(errorText(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const bindValidatedSchool = async () => {
-    if (!validated) return
-    setBusy(true)
-    setError('')
-    try {
-      await api.bindTeacherSchool(validated.code)
-      await onBound()
-      setCode('')
-      setValidated(null)
-      setStep('code')
-    } catch (err) {
-      setError(errorText(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const signInWithGoogle = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      await signInWithPopup(auth, googleProvider)
-      await bindValidatedSchool()
-    } catch (err) {
-      setError(errorText(err))
-      setBusy(false)
-    }
-  }
-
-  const signInWithEmail = async (event: FormEvent) => {
-    event.preventDefault()
-    setBusy(true)
-    setError('')
-    try {
-      if (authMode === 'sign-up') {
-        await createUserWithEmailAndPassword(auth, email.trim(), password)
-      } else {
-        await signInWithEmailAndPassword(auth, email.trim(), password)
-      }
-      await bindValidatedSchool()
-    } catch (err) {
-      setError(errorText(err))
-      setBusy(false)
-    }
-  }
-
-  return (
-    <section className="gate panel">
-      <div className="gate-steps" aria-label="Teacher onboarding progress">
-        <span className={step === 'code' ? 'active' : ''}>Code</span>
-        <span className={step === 'confirm' ? 'active' : ''}>Confirm</span>
-        <span className={step === 'auth' ? 'active' : ''}>Account</span>
-      </div>
-
-      {step === 'code' ? (
-        <form className="gate-form" onSubmit={validateCode}>
-          <label>
-            Teacher code
-            <input
-              autoFocus
-              value={code}
-              onChange={(event) => setCode(event.target.value.toUpperCase())}
-              placeholder="T-KEDAH234"
-              autoComplete="one-time-code"
-            />
-          </label>
-          <div className="row-actions">
-            {onCancel ? (
-              <button className="ghost" type="button" onClick={onCancel}>
-                Cancel
-              </button>
-            ) : null}
-            <button type="submit" disabled={busy || code.trim().length === 0}>
-              {busy ? 'Checking...' : 'Continue'}
-            </button>
-          </div>
-        </form>
-      ) : null}
-
-      {step === 'confirm' && validated ? (
-        <div className="confirm-school">
-          <p className="teacher-kicker">{validated.event.name}</p>
-          <h2>{validated.school.name}</h2>
-          <p>Is this your school?</p>
-          <div className="row-actions">
-            <button className="ghost" type="button" onClick={() => setStep('code')} disabled={busy}>
-              Change code
-            </button>
-            {user ? (
-              <button type="button" onClick={bindValidatedSchool} disabled={busy}>
-                {busy ? 'Adding...' : 'Add school'}
-              </button>
-            ) : (
-              <button type="button" onClick={() => setStep('auth')} disabled={busy}>
-                Yes, continue
-              </button>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {step === 'auth' ? (
-        <div className="auth-panel">
-          <div className="segmented" role="group" aria-label="Authentication mode">
-            <button type="button" className={authMode === 'sign-up' ? 'active' : ''} onClick={() => setAuthMode('sign-up')}>
-              Sign up
-            </button>
-            <button type="button" className={authMode === 'sign-in' ? 'active' : ''} onClick={() => setAuthMode('sign-in')}>
-              Sign in
-            </button>
-          </div>
-          <button className="google" type="button" onClick={signInWithGoogle} disabled={busy}>
-            Continue with Google
-          </button>
-          <form className="gate-form" onSubmit={signInWithEmail}>
-            <label>
-              Email
-              <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" />
-            </label>
-            <label>
-              Password
-              <input
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                type="password"
-                autoComplete={authMode === 'sign-up' ? 'new-password' : 'current-password'}
-              />
-            </label>
-            <div className="row-actions">
-              <button className="ghost" type="button" onClick={() => setStep('confirm')} disabled={busy}>
-                Back
-              </button>
-              <button type="submit" disabled={busy || !email.trim() || password.length < 6}>
-                {busy ? 'Working...' : authMode === 'sign-up' ? 'Create account' : 'Sign in'}
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
-      {error ? <div className="notice error">{error}</div> : null}
-    </section>
   )
 }
 
@@ -383,6 +226,8 @@ function Dashboard({
   selectedClassId,
   onSelectSchool,
   onSelectClass,
+  workspaceMode,
+  onWorkspaceMode,
   onClassChanged,
 }: {
   schools: TeacherSchoolView[]
@@ -391,6 +236,8 @@ function Dashboard({
   selectedClassId: string
   onSelectSchool: (schoolId: string) => void
   onSelectClass: (classId: string) => void
+  workspaceMode: WorkspaceMode
+  onWorkspaceMode: (mode: WorkspaceMode) => void
   onClassChanged: () => Promise<void>
 }) {
   return (
@@ -416,11 +263,25 @@ function Dashboard({
             classInfo={classInfo}
             selected={classInfo.id === selectedClassId}
             onSelect={() => onSelectClass(classInfo.id)}
+            onViewRanking={() => {
+              onSelectClass(classInfo.id)
+              onWorkspaceMode('ranking')
+            }}
+            onClassChanged={onClassChanged}
           />
         ))}
       </section>
 
-      {activeClass ? <ClassWorkspace activeClass={activeClass} onClassChanged={onClassChanged} /> : <div className="panel">No classes yet.</div>}
+      {activeClass ? (
+        <ClassWorkspace
+          activeClass={activeClass}
+          mode={workspaceMode}
+          onModeChange={onWorkspaceMode}
+          onClassChanged={onClassChanged}
+        />
+      ) : (
+        <div className="panel">No classes yet.</div>
+      )}
     </section>
   )
 }
@@ -430,18 +291,47 @@ function ClassCard({
   classInfo,
   selected,
   onSelect,
+  onViewRanking,
+  onClassChanged,
 }: {
   schoolName: string
   classInfo: ClassDoc
   selected: boolean
   onSelect: () => void
+  onViewRanking: () => void
+  onClassChanged: () => Promise<void>
 }) {
-  const [printOpen, setPrintOpen] = useState(false)
+  const toast = useToast()
+  const [qrOpen, setQrOpen] = useState(false)
+  const [busyAction, setBusyAction] = useState<'reset' | 'toggle' | ''>('')
   const url = joinUrl(classInfo.joinCode)
 
-  const printCard = () => {
-    setPrintOpen(true)
-    window.setTimeout(() => window.print(), 80)
+  const resetCode = async () => {
+    if (!window.confirm('Reset this class code? The old code becomes invalid immediately.')) return
+    setBusyAction('reset')
+    try {
+      const nextCode = await api.resetJoinCode(classPath(classInfo))
+      toast(`Class code reset to ${nextCode}.`, 'success')
+      await onClassChanged()
+    } catch (error) {
+      toast(errorText(error), 'error')
+    } finally {
+      setBusyAction('')
+    }
+  }
+
+  const toggleActive = async () => {
+    const nextActive = !classInfo.joinActive
+    setBusyAction('toggle')
+    try {
+      await api.setJoinActive(classPath(classInfo), nextActive)
+      toast(nextActive ? 'Class code enabled.' : 'Class code disabled for new joins.', 'success')
+      await onClassChanged()
+    } catch (error) {
+      toast(errorText(error), 'error')
+    } finally {
+      setBusyAction('')
+    }
   }
 
   return (
@@ -449,20 +339,24 @@ function ClassCard({
       <button className="class-card-select" type="button" onClick={onSelect} aria-pressed={selected}>
         <span>{classInfo.name}</span>
         <strong>{classInfo.joinCode}</strong>
+        <em>{classInfo.joinActive ? 'Active for new joins' : 'New joins disabled'}</em>
       </button>
-      <div className="qr-box">
+      <button className="qr-box" type="button" onClick={() => setQrOpen(true)} aria-label={`Open QR code for ${classInfo.name}`}>
         <QRCodeSVG value={url} size={112} marginSize={1} />
-      </div>
+      </button>
       <div className="row-actions compact">
-        <a className="secondary link-button" href={`/join/${classInfo.joinCode}`}>
-          Join link
-        </a>
-        <button className="secondary" type="button" onClick={printCard}>
-          Print
+        <button className="secondary" type="button" onClick={onViewRanking}>
+          View ranking
+        </button>
+        <button className="secondary" type="button" onClick={toggleActive} disabled={busyAction === 'toggle'}>
+          {busyAction === 'toggle' ? 'Saving...' : classInfo.joinActive ? 'Disable' : 'Enable'}
+        </button>
+        <button className="danger" type="button" onClick={resetCode} disabled={busyAction === 'reset'}>
+          {busyAction === 'reset' ? 'Resetting...' : 'Reset code'}
         </button>
       </div>
-      {printOpen ? (
-        <PrintSheet schoolName={schoolName} classInfo={classInfo} joinUrlValue={url} onClose={() => setPrintOpen(false)} />
+      {qrOpen ? (
+        <PrintSheet schoolName={schoolName} classInfo={classInfo} joinUrlValue={url} onClose={() => setQrOpen(false)} />
       ) : null}
     </article>
   )
@@ -486,7 +380,7 @@ function PrintSheet({
           Close
         </button>
         <button type="button" onClick={() => window.print()}>
-          Print again
+          Print
         </button>
       </div>
       <section className="print-sheet" aria-label={`${classInfo.name} print sheet`}>
@@ -507,30 +401,48 @@ function PrintSheet({
   )
 }
 
-function ClassWorkspace({ activeClass, onClassChanged }: { activeClass: ActiveClass; onClassChanged: () => Promise<void> }) {
+function ClassWorkspace({
+  activeClass,
+  mode,
+  onModeChange,
+  onClassChanged,
+}: {
+  activeClass: ActiveClass
+  mode: WorkspaceMode
+  onModeChange: (mode: WorkspaceMode) => void
+  onClassChanged: () => Promise<void>
+}) {
+  const toast = useToast()
   const [participants, setParticipants] = useState<ParticipantDoc[]>([])
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([])
+  const [includePending, setIncludePending] = useState(true)
   const [busyParticipantId, setBusyParticipantId] = useState<string>('')
   const [busyBulk, setBusyBulk] = useState(false)
+  const [loadingData, setLoadingData] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState('')
   const [error, setError] = useState('')
 
-  const loadClassData = async () => {
+  const loadClassData = useCallback(async () => {
+    setLoadingData(true)
     setError('')
     try {
       const [nextParticipants, nextLeaderboard] = await Promise.all([
         api.listParticipants(classPath(activeClass.classInfo)),
-        api.getLeaderboard(activeClass.classInfo.joinCode, { includePending: true }),
+        api.getLeaderboardByPath(classPath(activeClass.classInfo), { includePending }),
       ])
       setParticipants(nextParticipants)
       setLeaderboard(nextLeaderboard)
+      setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
     } catch (err) {
       setError(errorText(err))
+    } finally {
+      setLoadingData(false)
     }
-  }
+  }, [activeClass.classInfo, includePending])
 
   useEffect(() => {
     void loadClassData()
-  }, [activeClass.classInfo.id])
+  }, [loadClassData])
 
   const setStatus = async (participant: ParticipantDoc, status: ParticipantStatus) => {
     if (status === 'rejected' && !window.confirm(`Reject ${participant.name}?`)) return
@@ -539,8 +451,10 @@ function ClassWorkspace({ activeClass, onClassChanged }: { activeClass: ActiveCl
     try {
       await api.setParticipantStatus(participantPath(participant), status)
       await loadClassData()
+      toast(`${participant.name} marked ${statusLabel(status).toLowerCase()}.`, 'success')
     } catch (err) {
       setError(errorText(err))
+      toast(errorText(err), 'error')
     } finally {
       setBusyParticipantId('')
     }
@@ -554,14 +468,19 @@ function ClassWorkspace({ activeClass, onClassChanged }: { activeClass: ActiveCl
       await loadClassData()
       await onClassChanged()
       setError(count === 0 ? 'No pending participants.' : '')
+      toast(count === 0 ? 'No pending participants.' : `Approved ${count} participant${count === 1 ? '' : 's'}.`, count === 0 ? 'info' : 'success')
     } catch (err) {
       setError(errorText(err))
+      toast(errorText(err), 'error')
     } finally {
       setBusyBulk(false)
     }
   }
 
   const pendingCount = participants.filter((participant) => participant.status === 'pending').length
+  const rankedRows = leaderboard.filter((row) => row.rank !== null).length
+  const unrankedRows = leaderboard.filter((row) => row.rank === null && row.attemptsUsed.c1 + row.attemptsUsed.c2 + row.attemptsUsed.c3 > 0).length
+  const pendingRows = leaderboard.filter((row) => row.status === 'pending').length
 
   return (
     <section className="workspace">
@@ -570,15 +489,46 @@ function ClassWorkspace({ activeClass, onClassChanged }: { activeClass: ActiveCl
           <p className="teacher-kicker">{activeClass.school.school.name}</p>
           <h2>{activeClass.classInfo.name}</h2>
         </div>
-        <button type="button" onClick={approveAll} disabled={busyBulk || pendingCount === 0}>
-          {busyBulk ? 'Approving...' : `Approve all (${pendingCount})`}
-        </button>
+        <div className="workspace-actions">
+          <div className="segmented" role="group" aria-label="Class workspace">
+            <button type="button" className={mode === 'participants' ? 'active' : ''} onClick={() => onModeChange('participants')}>
+              Participants
+            </button>
+            <button type="button" className={mode === 'ranking' ? 'active' : ''} onClick={() => onModeChange('ranking')}>
+              Ranking
+            </button>
+          </div>
+          {mode === 'participants' ? (
+            <button type="button" onClick={approveAll} disabled={busyBulk || pendingCount === 0}>
+              {busyBulk ? 'Approving...' : `Approve all (${pendingCount})`}
+            </button>
+          ) : (
+            <button className="secondary" type="button" onClick={() => void loadClassData()} disabled={loadingData}>
+              {loadingData ? 'Refreshing...' : 'Refresh'}
+            </button>
+          )}
+        </div>
       </header>
       {error ? <div className={`notice ${error === 'No pending participants.' ? 'info' : 'error'}`}>{error}</div> : null}
-      <div className="workspace-grid">
-        <ParticipantsTable participants={participants} busyParticipantId={busyParticipantId} onStatus={setStatus} />
-        <LeaderboardPreview rows={leaderboard} />
-      </div>
+      {mode === 'participants' ? (
+        <div className="workspace-grid">
+          <ParticipantsTable participants={participants} busyParticipantId={busyParticipantId} onStatus={setStatus} />
+          <RankingSummary rows={leaderboard} loading={loadingData} onOpen={() => onModeChange('ranking')} />
+        </div>
+      ) : (
+        <RankingWorkspace
+          rows={leaderboard}
+          challenges={activeClass.school.event.challenges}
+          attemptsPerChallenge={activeClass.school.event.attemptsPerChallenge}
+          includePending={includePending}
+          onIncludePending={setIncludePending}
+          loading={loadingData}
+          lastUpdated={lastUpdated}
+          rankedRows={rankedRows}
+          unrankedRows={unrankedRows}
+          pendingRows={pendingRows}
+        />
+      )}
     </section>
   )
 }
@@ -647,41 +597,74 @@ function ParticipantsTable({
   )
 }
 
-function LeaderboardPreview({ rows }: { rows: LeaderboardRow[] }) {
+function RankingSummary({ rows, loading, onOpen }: { rows: LeaderboardRow[]; loading: boolean; onOpen: () => void }) {
+  const rankedRows = rows.filter((row) => row.rank !== null).length
+  const pendingRows = rows.filter((row) => row.status === 'pending').length
+  const visibleRows = rows.filter((row) => row.rank !== null || row.attemptsUsed.c1 + row.attemptsUsed.c2 + row.attemptsUsed.c3 > 0).length
+
   return (
     <section className="panel table-panel">
       <header className="panel-header">
-        <h3>Leaderboard</h3>
-        <span>{rows.length}</span>
+        <h3>Ranking</h3>
+        <span>{loading ? 'Loading' : `${rankedRows} ranked`}</span>
       </header>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Rank</th>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Score</th>
-              <th>Attempts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.publicId} className={row.status === 'pending' ? 'pending-row' : ''}>
-                <td>{row.rank ?? '-'}</td>
-                <td>
-                  {row.name}
-                  <span className="public-id">{row.publicId}</span>
-                </td>
-                <td>
-                  <span className={`status ${row.status}`}>{statusLabel(row.status)}</span>
-                </td>
-                <td>{row.averageSec === null ? '-' : `${row.averageSec.toFixed(1)}s`}</td>
-                <td>{row.attemptsUsed.c1 + row.attemptsUsed.c2 + row.attemptsUsed.c3}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="ranking-summary">
+        <strong>{visibleRows}</strong>
+        <span>visible participants</span>
+        <strong>{pendingRows}</strong>
+        <span>pending included</span>
+        <button className="secondary" type="button" onClick={onOpen}>
+          View ranking
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function RankingWorkspace({
+  rows,
+  challenges,
+  attemptsPerChallenge,
+  includePending,
+  onIncludePending,
+  loading,
+  lastUpdated,
+  rankedRows,
+  unrankedRows,
+  pendingRows,
+}: {
+  rows: LeaderboardRow[]
+  challenges: ChallengeDef[]
+  attemptsPerChallenge: number | null
+  includePending: boolean
+  onIncludePending: (value: boolean) => void
+  loading: boolean
+  lastUpdated: string
+  rankedRows: number
+  unrankedRows: number
+  pendingRows: number
+}) {
+  return (
+    <section className="ranking-panel" aria-label="Class ranking">
+      <div className="ranking-toolbar">
+        <div className="segmented" role="group" aria-label="Registration filter">
+          <button type="button" className={!includePending ? 'active' : ''} onClick={() => onIncludePending(false)}>
+            Registered
+          </button>
+          <button type="button" className={includePending ? 'active' : ''} onClick={() => onIncludePending(true)}>
+            Include pending
+          </button>
+        </div>
+        <p>
+          {rankedRows} ranked
+          {unrankedRows > 0 ? ` - ${unrankedRows} unranked` : ''}
+          {includePending && pendingRows > 0 ? ` - ${pendingRows} pending` : ''}
+          {lastUpdated ? ` - updated ${lastUpdated}` : ''}
+        </p>
+      </div>
+      <div className="ranking-table-shell">
+        {loading ? <div className="panel muted">Loading ranking...</div> : null}
+        <LeaderboardTable rows={rows} challenges={challenges} attemptsPerChallenge={attemptsPerChallenge} />
       </div>
     </section>
   )
@@ -702,7 +685,9 @@ const teacherStyles = `
 .panel-header,
 .row-actions,
 .teacher-actions,
-.table-actions {
+.table-actions,
+.workspace-actions,
+.ranking-toolbar {
   display: flex;
   align-items: center;
 }
@@ -733,7 +718,8 @@ const teacherStyles = `
 }
 .teacher-actions,
 .row-actions,
-.table-actions {
+.table-actions,
+.workspace-actions {
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -923,6 +909,12 @@ input {
   color: #2459d6;
   font-size: 24px;
 }
+.class-card-select em {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
 .qr-box {
   align-items: center;
   background: #f8fafc;
@@ -931,6 +923,10 @@ input {
   display: flex;
   justify-content: center;
   min-height: 136px;
+  width: 100%;
+}
+.qr-box:hover {
+  border-color: #2459d6;
 }
 .compact {
   justify-content: space-between;
@@ -997,11 +993,53 @@ th {
   background: #fff1f0;
   color: #b42318;
 }
+.status.withdrawn {
+  background: #f2f4f7;
+  color: #667085;
+}
 .public-id {
   color: #667085;
   display: block;
   font-size: 12px;
   margin-top: 3px;
+}
+.ranking-summary {
+  display: grid;
+  gap: 7px;
+}
+.ranking-summary strong {
+  color: #172033;
+  font-size: 30px;
+  line-height: 1;
+}
+.ranking-summary span {
+  color: #667085;
+  font-size: 13px;
+  font-weight: 800;
+}
+.ranking-summary button {
+  margin-top: 8px;
+  width: max-content;
+}
+.ranking-panel {
+  display: grid;
+  gap: 12px;
+}
+.ranking-toolbar {
+  justify-content: space-between;
+  gap: 12px;
+}
+.ranking-toolbar p {
+  margin: 0;
+  color: #667085;
+  font-weight: 700;
+}
+.ranking-table-shell {
+  overflow: hidden;
+  border: 1px solid #dfe5f1;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 8px 22px rgba(29, 44, 77, .06);
 }
 .print-modal {
   position: fixed;
@@ -1065,6 +1103,12 @@ th {
   .workspace-grid {
     grid-template-columns: 1fr;
   }
+  .workspace-actions,
+  .ranking-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
 }
 @media print {
   body {
@@ -1092,6 +1136,15 @@ th {
   }
   .print-modal {
     position: static;
+  }
+  .print-sheet svg,
+  .print-qr svg {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .print-qr {
+    display: block !important;
   }
   .print-sheet {
     height: 100vh;
