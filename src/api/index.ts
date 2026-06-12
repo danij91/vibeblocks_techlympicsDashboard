@@ -99,6 +99,8 @@ export interface CompetitionApi {
   createAdminInvite(): Promise<string>
   /** 로그인 사용자가 초대코드 사용 → admin(주최측) 역할 획득 */
   redeemAdminInvite(code: string): Promise<void>
+  /** v6: 초대코드 사전 검증(미사용 여부) — 가입 전 게이트용, 무인증 호출 가능 */
+  validateAdminInvite(code: string): Promise<void>
   listRoles(): Promise<RoleDoc[]>
   revokeRole(uid: string): Promise<void>
   /** v4: 발급한 초대코드 목록/삭제 (master) */

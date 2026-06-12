@@ -618,6 +618,11 @@ export function createMockApi(): CompetitionApi {
       return delay(code)
     },
 
+    async validateAdminInvite(code) {
+      if (!s.invites.has(normalizeCode(code))) throw new Error('INVITE_NOT_FOUND')
+      return delay(undefined)
+    },
+
     async redeemAdminInvite(code) {
       const c = normalizeCode(code)
       if (!s.invites.has(c)) throw new Error('INVITE_NOT_FOUND')

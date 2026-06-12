@@ -31,16 +31,38 @@ export default function TeacherCodeGate({
   user: User | null
   initialCode?: string
   entryAside?: ReactNode
-  onBound: () => void | Promise<void>
+  onBound: (role: 'teacher' | 'admin') => void | Promise<void>
   onCancel?: () => void
 }) {
   const [step, setStep] = useState<GateStep>('code')
   const [code, setCode] = useState(initialCode)
   const [validated, setValidated] = useState<ValidatedTeacherCode | null>(null)
+  const [inviteCode, setInviteCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const toast = useToast()
   const t = useT()
+
+  // 어드민 초대코드(V-) — 같은 입력칸에서 분기. 로그인 상태면 즉시 redeem, 아니면 가입 후 redeem
+  const redeemInvite = async (normalized: string, { bubbleError = false }: { bubbleError?: boolean } = {}) => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.redeemAdminInvite(normalized)
+      await onBound('admin')
+      toast(t('auth.inviteRedeemed'), 'success')
+      setCode('')
+      setInviteCode('')
+      setStep('code')
+    } catch (err) {
+      const message = errorText(err)
+      setError(message)
+      if (!bubbleError) toast(message, 'error')
+      if (bubbleError) throw err
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const validateCode = async (event: FormEvent) => {
     event.preventDefault()
@@ -49,15 +71,23 @@ export default function TeacherCodeGate({
     try {
       const normalized = normalizeCode(code)
       const kind = classifyCode(normalized)
+      if (kind === 'invite') {
+        await api.validateAdminInvite(normalized)
+        if (isRealUser(user)) {
+          await redeemInvite(normalized)
+        } else {
+          setInviteCode(normalized)
+          setStep('auth')
+        }
+        return
+      }
       if (kind !== 'teacher') {
         const message =
           kind === 'join'
             ? t('teacher.classCodeError')
-            : kind === 'invite'
-              ? t('teacher.inviteCodeError')
-              : kind === 'recovery'
-                ? t('teacher.recoveryCodeError')
-                : t('teacher.enterTeacherCodeError')
+            : kind === 'recovery'
+              ? t('teacher.recoveryCodeError')
+              : t('teacher.enterTeacherCodeError')
         setError(message)
         toast(message, 'error')
         return
@@ -87,7 +117,7 @@ export default function TeacherCodeGate({
     setError('')
     try {
       await api.bindTeacherSchool(validated.code)
-      await onBound()
+      await onBound('teacher')
       toast(t('teacher.accessAdded'), 'success')
       setCode('')
       setValidated(null)
@@ -182,9 +212,13 @@ export default function TeacherCodeGate({
 
       {step === 'auth' ? (
         <AuthPanel
-          title={t('auth.createTeacherAccount')}
+          title={inviteCode ? t('auth.createAccount') : t('auth.createTeacherAccount')}
           mode="sign-up"
-          onSignedIn={() => bindValidatedSchool({ bubbleError: true, notifyError: false })}
+          onSignedIn={() =>
+            inviteCode
+              ? redeemInvite(inviteCode, { bubbleError: true })
+              : bindValidatedSchool({ bubbleError: true, notifyError: false })
+          }
         />
       ) : null}
       {error ? <div className="auth-alert">{error}</div> : null}

@@ -1030,6 +1030,16 @@ export function createFirestoreApi(): CompetitionApi {
       }
     },
 
+    async validateAdminInvite(code) {
+      try {
+        await ensureUser()
+        const snap = await getDoc(doc(db, 'adminInvites', normalizeCode(code)))
+        if (!snap.exists() || snap.data().usedBy !== null) throw new Error('INVITE_NOT_FOUND')
+      } catch (error) {
+        return mapError(error)
+      }
+    },
+
     async redeemAdminInvite(code) {
       try {
         const uid = await ensureUser()

@@ -316,7 +316,11 @@ export default function TeacherConsole() {
     [activeClass, setTeacherRoute],
   )
 
-  const handleBound = async () => {
+  const handleBound = async (role: 'teacher' | 'admin') => {
+    if (role === 'admin') {
+      navigate('/admin', { replace: true })
+      return
+    }
     await refreshRole()
     await refreshSchools()
     setShowGate(false)

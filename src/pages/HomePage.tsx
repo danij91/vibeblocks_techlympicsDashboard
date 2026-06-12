@@ -90,9 +90,9 @@ export default function HomePage() {
                     </button>
                   </>
                 }
-                onBound={async () => {
+                onBound={async (role) => {
                   await refreshRole()
-                  navigate('/teacher', { replace: true })
+                  navigate(role === 'admin' ? '/admin' : '/teacher', { replace: true })
                 }}
               />
             ) : null}

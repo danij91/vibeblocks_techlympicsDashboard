@@ -7,6 +7,7 @@
 > D. rules: school keys에 `level`(enum 검증, admin write 경로만). class keys에 `grade`(int 1-6).
 > E. v4-E("grade 입력 폐지")는 **앱 참가자 grade** 한정 — 학급 grade는 본 개정으로 정식 모델.
 > F. **`deleteEvent(eventId)`** (admin/master): 이벤트 연쇄 삭제 — 학교(teachers)·학급(board·participants·attempts)·joinCodes/teacherCodes 매핑까지 클라이언트 배치 삭제(Spark, 400/batch). rules: events/schools/classes/participants/attempts delete = isAdmin() (attempts 개별 조작 금지는 운영 규율). UI = Events 탭 danger 버튼 + 카운트 명시 ConfirmModal.
+> G. **admin 가입 = 같은 코드 입력칸** — TeacherCodeGate가 `classifyCode`로 분기: V-초대코드면 (로그인 상태) 즉시 redeem / (비로그인) 가입 후 redeem → /admin. **admin 진입은 어디에도 별도 노출 안 함** — RoleLanding의 "Admin invite" 선택지 제거, 설명 텍스트도 중립화. api 추가: `validateAdminInvite(code)`(가입 전 코드 검증, 무인증). `onBound(role)`로 콜러가 /teacher·/admin 분기.
 
 > **v4 변경:**
 > A. **랭킹 정렬 v4** (`scoring.ts`): 완료 종목 수 내림차순 → 완료분 평균 오름차순 → 갱신시각. **미시도 포함 전원 표시** (완료 0 = rank '-', 최하단). LeaderboardRow에 `completedCount` 추가. 무순위제(3개 미완) 폐지.
