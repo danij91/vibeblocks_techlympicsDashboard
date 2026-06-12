@@ -450,9 +450,16 @@
   background: #ffffff;
   border-radius: 8px;
   box-shadow: 0 18px 60px rgba(15, 23, 42, 0.24);
+  max-height: calc(100vh - 40px);
   max-width: 760px;
+  overflow: auto;
   padding: 18px;
   width: min(760px, 100%);
+}
+
+.ops-modal-wide {
+  max-width: 1040px;
+  width: min(1040px, 100%);
 }
 
 @media (max-width: 920px) {

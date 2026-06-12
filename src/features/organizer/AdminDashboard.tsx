@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { api } from '../../api'
 import { formatSec } from '../../api/scoring'
@@ -24,6 +25,7 @@ import './admin.css'
 type AdminTab = 'events' | 'import' | 'schools' | 'participants'
 type ImportField = 'schoolName' | 'state' | 'zone'
 type AdminSchoolView = Awaited<ReturnType<typeof api.listEventSchools>>[number]
+type SearchParamSetter = ReturnType<typeof useSearchParams>[1]
 
 interface ParsedWorkbook {
   fileName: string
@@ -55,6 +57,35 @@ interface EventForm {
 
 const requiredFields: ImportField[] = ['schoolName']
 const importFields: ImportField[] = ['schoolName', 'state', 'zone']
+const adminTabs: AdminTab[] = ['events', 'import', 'schools', 'participants']
+
+function parseAdminTab(value: string | null): AdminTab {
+  return adminTabs.includes(value as AdminTab) ? (value as AdminTab) : 'events'
+}
+
+function updateQueryParams(
+  searchParams: URLSearchParams,
+  setSearchParams: SearchParamSetter,
+  patch: Record<string, string | null | undefined>,
+  replace = false,
+) {
+  const next = new URLSearchParams(searchParams)
+  Object.entries(patch).forEach(([key, value]) => {
+    const normalized = value?.trim()
+    if (normalized) next.set(key, normalized)
+    else next.delete(key)
+  })
+  if (next.toString() === searchParams.toString()) return
+  setSearchParams(next, { replace })
+}
+
+function closeQueryModal(searchParams: URLSearchParams, setSearchParams: SearchParamSetter) {
+  if (window.history.length > 1) {
+    window.history.back()
+    return
+  }
+  updateQueryParams(searchParams, setSearchParams, { modal: null, teacher: null, uid: null }, true)
+}
 
 function fieldLabel(field: ImportField, t: TFunction): string {
   if (field === 'schoolName') return t('common.schoolName')
@@ -220,16 +251,31 @@ function gradeFromClassName(className: string) {
 export default function AdminDashboard({ embedded = false }: { embedded?: boolean }) {
   const toast = useToast()
   const t = useT()
-  const [tab, setTab] = useState<AdminTab>('events')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = parseAdminTab(searchParams.get('tab'))
+  const modal = searchParams.get('modal')
   const [events, setEvents] = useState<EventDoc[]>([])
   const [selectedEventId, setSelectedEventId] = useState('')
   const [stats, setStats] = useState<EventStats | null>(null)
   const [schools, setSchools] = useState<AdminSchoolView[]>([])
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
 
   const selectedEvent = events.find((event) => event.id === selectedEventId) ?? events[0]
+  const createOpen = modal === 'create-event'
+  const updateQuery = useCallback((patch: Record<string, string | null | undefined>, replace = false) => {
+    updateQueryParams(searchParams, setSearchParams, patch, replace)
+  }, [searchParams, setSearchParams])
+
+  const selectTab = (item: AdminTab) => {
+    updateQuery({ tab: item, school: null, class: null, modal: null, teacher: null, uid: null }, false)
+  }
+
+  const openCreateModal = () => {
+    updateQuery({ modal: 'create-event' }, false)
+  }
+
+  const closeModal = () => closeQueryModal(searchParams, setSearchParams)
 
   const refresh = async (eventId = selectedEvent?.id) => {
     setRefreshing(true)
@@ -279,7 +325,7 @@ export default function AdminDashboard({ embedded = false }: { embedded?: boolea
         <aside className="ops-panel">
           <div className="ops-topbar compact">
             <h2>{t('admin.events')}</h2>
-            <button className="ops-button primary" onClick={() => setCreateOpen(true)}>{t('admin.new')}</button>
+            <button className="ops-button primary" onClick={openCreateModal}>{t('admin.new')}</button>
           </div>
           <div className="ops-event-list">
             {events.map((event) => (
@@ -308,8 +354,8 @@ export default function AdminDashboard({ embedded = false }: { embedded?: boolea
               {selectedEvent && <span className={`ops-pill ${selectedEvent.frozen ? 'warn' : 'ok'}`}>{selectedEvent.frozen ? t('common.frozen') : t('common.open')}</span>}
             </div>
             <div className="ops-tabs">
-              {(['events', 'import', 'schools', 'participants'] as AdminTab[]).map((item) => (
-                <button className={`ops-tab ${tab === item ? 'active' : ''}`} key={item} onClick={() => setTab(item)}>
+              {adminTabs.map((item) => (
+                <button className={`ops-tab ${tab === item ? 'active' : ''}`} key={item} onClick={() => selectTab(item)}>
                   {item === 'events' ? t('admin.eventSetup') : item === 'import' ? t('admin.import') : item === 'schools' ? t('common.schools') : t('common.participants')}
                 </button>
               ))}
@@ -353,11 +399,11 @@ export default function AdminDashboard({ embedded = false }: { embedded?: boolea
 
       {createOpen && (
         <EventCreateModal
-          onClose={() => setCreateOpen(false)}
+          onClose={closeModal}
           onCreated={async (created) => {
-            setCreateOpen(false)
             toast(t('admin.eventCreated', { name: created.name }), 'success')
             await refresh(created.id)
+            closeModal()
           }}
         />
       )}
@@ -513,8 +559,8 @@ function EventCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
   }
 
   return (
-    <div className="ops-modal-backdrop" role="presentation">
-      <section aria-modal="true" className="ops-modal" role="dialog">
+    <div className="ops-modal-backdrop" role="presentation" onClick={onClose}>
+      <section aria-modal="true" className="ops-modal" role="dialog" onClick={(event) => event.stopPropagation()}>
         <div className="ops-topbar">
           <div>
             <p className="ops-eyebrow">{t('admin.newEvent')}</p>
@@ -539,6 +585,41 @@ function EventCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
   )
 }
 
+function ConfirmModal({
+  title,
+  message,
+  confirmLabel,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  title: string
+  message: string
+  confirmLabel: string
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const t = useT()
+  return (
+    <div className="ops-modal-backdrop" role="presentation" onClick={onClose}>
+      <section aria-modal="true" className="ops-modal" role="dialog" onClick={(event) => event.stopPropagation()}>
+        <div className="ops-topbar">
+          <h2>{title}</h2>
+          <button className="ops-button" disabled={busy} onClick={onClose}>{t('common.close')}</button>
+        </div>
+        <p>{message}</p>
+        <div className="ops-row-actions" style={{ marginTop: 12 }}>
+          <button className="ops-button" disabled={busy} onClick={onClose}>{t('common.cancel')}</button>
+          <button className="ops-button danger" disabled={busy} onClick={onConfirm}>
+            {busy ? t('admin.revoking') : confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function ImportPanel({
   event,
   onImported,
@@ -548,6 +629,7 @@ function ImportPanel({
 }) {
   const toast = useToast()
   const t = useT()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [schoolForm, setSchoolForm] = useState({ schoolName: '', state: '', zone: '' })
   const [workbook, setWorkbook] = useState<ParsedWorkbook | null>(null)
   const [mapping, setMapping] = useState<Record<ImportField, string>>({ schoolName: '', state: '', zone: '' })
@@ -562,6 +644,9 @@ function ImportPanel({
   const headers = rows[0] ?? []
   const preview = useMemo(() => buildPreview(rows, mapping, selected, t), [rows, mapping, selected, t])
   const importable = preview.filter((row) => row.selected)
+  const previewOpen = searchParams.get('modal') === 'import-preview'
+  const openPreview = () => updateQueryParams(searchParams, setSearchParams, { tab: 'import', modal: 'import-preview' }, false)
+  const closePreview = () => closeQueryModal(searchParams, setSearchParams)
 
   const loadFile = async (file: File | undefined) => {
     if (!file) return
@@ -574,6 +659,7 @@ function ImportPanel({
       setWorkbook(parsed)
       setSelected(new Set(bodyIndexes))
       setMapping(pickInitialMapping(nextRows[0] ?? []))
+      updateQueryParams(searchParams, setSearchParams, { tab: 'import', modal: 'import-preview' }, false)
     } catch (err) {
       const message = getErrorMessage(err)
       setError(message)
@@ -665,8 +751,23 @@ function ImportPanel({
           )}
         </div>
 
-        {workbook && (
-          <>
+        {workbook && !previewOpen && (
+          <div className="ops-row-actions" style={{ marginTop: 12 }}>
+            <button className="ops-button" onClick={openPreview}>{t('admin.workbookImport')}</button>
+            <span className="ops-subtle">{workbook.fileName}</span>
+          </div>
+        )}
+
+        {workbook && previewOpen && (
+          <div className="ops-modal-backdrop" role="presentation" onClick={closePreview}>
+            <section aria-modal="true" className="ops-modal ops-modal-wide" role="dialog" onClick={(event) => event.stopPropagation()}>
+              <div className="ops-topbar">
+                <div>
+                  <p className="ops-eyebrow">{workbook.fileName}</p>
+                  <h2>{t('admin.workbookImport')}</h2>
+                </div>
+                <button className="ops-button" onClick={closePreview}>{t('common.close')}</button>
+              </div>
             <div className="ops-mapping-box" style={{ marginTop: 12 }}>
               <h3>{t('admin.columnMapping')}</h3>
               <div className="ops-form two" style={{ marginTop: 10 }}>
@@ -717,7 +818,8 @@ function ImportPanel({
               </button>
               <span className="ops-subtle">{t('admin.rowsSelected', { count: importable.length })}</span>
             </div>
-          </>
+            </section>
+          </div>
         )}
       </section>
 
@@ -736,10 +838,12 @@ function ImportPanel({
 function ParticipantsPanel({ event, schools }: { event: EventDoc; schools: AdminSchoolView[] }) {
   const toast = useToast()
   const t = useT()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const paramsKey = searchParams.toString()
   const [rows, setRows] = useState<ParticipantRow[]>([])
-  const [schoolFilter, setSchoolFilter] = useState('all')
-  const [gradeFilter, setGradeFilter] = useState('all')
-  const [query, setQuery] = useState('')
+  const [schoolFilter, setSchoolFilter] = useState(() => searchParams.get('participantSchool') ?? 'all')
+  const [gradeFilter, setGradeFilter] = useState(() => searchParams.get('grade') ?? 'all')
+  const [query, setQuery] = useState(() => searchParams.get('participantQuery') ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -776,6 +880,19 @@ function ParticipantsPanel({ event, schools }: { event: EventDoc; schools: Admin
     void loadParticipants()
   }, [event.id, schools])
 
+  useEffect(() => {
+    setSchoolFilter(searchParams.get('participantSchool') ?? 'all')
+    setGradeFilter(searchParams.get('grade') ?? 'all')
+    setQuery(searchParams.get('participantQuery') ?? '')
+  }, [paramsKey])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      updateQueryParams(searchParams, setSearchParams, { participantQuery: query.trim() || null }, true)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query, paramsKey, setSearchParams])
+
   const grades = useMemo(() => {
     const unique = [...new Set(rows.map((row) => row.grade).filter((grade) => grade !== '-'))]
     return unique.sort((a, b) => Number(a) - Number(b))
@@ -791,6 +908,16 @@ function ParticipantsPanel({ event, schools }: { event: EventDoc; schools: Admin
     })
   }, [gradeFilter, query, rows, schoolFilter])
 
+  const changeSchoolFilter = (value: string) => {
+    setSchoolFilter(value)
+    updateQueryParams(searchParams, setSearchParams, { participantSchool: value === 'all' ? null : value }, true)
+  }
+
+  const changeGradeFilter = (value: string) => {
+    setGradeFilter(value)
+    updateQueryParams(searchParams, setSearchParams, { grade: value === 'all' ? null : value }, true)
+  }
+
   return (
     <section className="ops-panel">
       <div className="ops-topbar">
@@ -805,13 +932,13 @@ function ParticipantsPanel({ event, schools }: { event: EventDoc; schools: Admin
       {error && <div className="ops-alert">{error}</div>}
       <div className="ops-filter-bar participants">
         <label className="ops-label">{t('common.school')}
-          <select className="ops-select" value={schoolFilter} onChange={(event) => setSchoolFilter(event.target.value)}>
+          <select className="ops-select" value={schoolFilter} onChange={(event) => changeSchoolFilter(event.target.value)}>
             <option value="all">{t('admin.allSchools')}</option>
             {schools.map((school) => <option key={school.school.id} value={school.school.id}>{school.school.name}</option>)}
           </select>
         </label>
         <label className="ops-label">{t('common.grade')}
-          <select className="ops-select" value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)}>
+          <select className="ops-select" value={gradeFilter} onChange={(event) => changeGradeFilter(event.target.value)}>
             <option value="all">{t('admin.allGrades')}</option>
             {grades.map((grade) => <option key={grade} value={grade}>{t('teacher.gradeLabel', { grade })}</option>)}
           </select>
@@ -863,12 +990,16 @@ function SchoolsPanel({
 }) {
   const toast = useToast()
   const t = useT()
-  const [query, setQuery] = useState('')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [searchParams, setSearchParams] = useSearchParams()
+  const paramsKey = searchParams.toString()
+  const selectedSchoolId = searchParams.get('school') ?? ''
+  const selectedClassId = searchParams.get('class') ?? ''
+  const modal = searchParams.get('modal')
+  const [query, setQuery] = useState(() => searchParams.get('schoolQuery') ?? '')
+  const expanded = useMemo(() => new Set(selectedSchoolId ? [selectedSchoolId] : []), [selectedSchoolId])
   const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set())
   const [teachersBySchool, setTeachersBySchool] = useState<Record<string, TeacherBinding[]>>({})
   const [participantsByClass, setParticipantsByClass] = useState<Record<string, ParticipantDoc[]>>({})
-  const [rankingKey, setRankingKey] = useState('')
   const [rankingRows, setRankingRows] = useState<LeaderboardRow[]>([])
   const [classDrafts, setClassDrafts] = useState<Record<string, string>>({})
   const [addingClassSchoolId, setAddingClassSchoolId] = useState('')
@@ -878,6 +1009,7 @@ function SchoolsPanel({
   const [loadingParticipantsKey, setLoadingParticipantsKey] = useState('')
   const [busyRankingKey, setBusyRankingKey] = useState('')
   const [error, setError] = useState('')
+  const rankingKey = selectedSchoolId && selectedClassId ? `${selectedSchoolId}:${selectedClassId}` : ''
 
   const filteredSchools = useMemo(() => {
     const q = normalizedSearch(query)
@@ -888,6 +1020,17 @@ function SchoolsPanel({
       return name.includes(q) || state.includes(q)
     })
   }, [query, schools])
+
+  useEffect(() => {
+    setQuery(searchParams.get('schoolQuery') ?? '')
+  }, [paramsKey])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      updateQueryParams(searchParams, setSearchParams, { schoolQuery: query.trim() || null }, true)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query, paramsKey, setSearchParams])
 
   const loadTeachers = async (schoolId: string) => {
     setLoadingTeachersSchoolId(schoolId)
@@ -905,13 +1048,23 @@ function SchoolsPanel({
   }
 
   const toggleExpanded = async (schoolId: string) => {
-    const next = new Set(expanded)
-    const opening = !next.has(schoolId)
-    if (opening) next.add(schoolId)
-    else next.delete(schoolId)
-    setExpanded(next)
+    const opening = selectedSchoolId !== schoolId
+    updateQueryParams(searchParams, setSearchParams, {
+      tab: 'schools',
+      school: opening ? schoolId : null,
+      class: null,
+      modal: null,
+      teacher: null,
+    }, false)
     if (opening && teachersBySchool[schoolId] === undefined) await loadTeachers(schoolId)
   }
+
+  useEffect(() => {
+    if (!selectedSchoolId) return
+    if (!schools.some((school) => school.school.id === selectedSchoolId)) return
+    if (teachersBySchool[selectedSchoolId] !== undefined) return
+    void loadTeachers(selectedSchoolId)
+  }, [selectedSchoolId, schools, teachersBySchool])
 
   const copyTeacherCode = async (code: string) => {
     await navigator.clipboard.writeText(code)
@@ -953,10 +1106,16 @@ function SchoolsPanel({
     }
   }
 
+  const openRevokeTeacher = (schoolId: string, teacher: TeacherBinding) => {
+    updateQueryParams(searchParams, setSearchParams, {
+      tab: 'schools',
+      school: schoolId,
+      modal: 'revoke-teacher',
+      teacher: teacher.uid,
+    }, false)
+  }
+
   const revokeTeacher = async (schoolId: string, teacher: TeacherBinding) => {
-    const label = teacher.email || teacher.uid
-    const ok = window.confirm(t('admin.revokeTeacherConfirm', { label }))
-    if (!ok) return
     const key = `${schoolId}:${teacher.uid}`
     setRevokingTeacherKey(key)
     setError('')
@@ -964,6 +1123,7 @@ function SchoolsPanel({
       await api.revokeTeacherBinding({ eventId: event.id, schoolId }, teacher.uid)
       toast(t('admin.teacherBindingRevoked'), 'success')
       await loadTeachers(schoolId)
+      closeQueryModal(searchParams, setSearchParams)
     } catch (err) {
       const message = getErrorMessage(err)
       setError(message)
@@ -1002,24 +1162,47 @@ function SchoolsPanel({
   const viewRanking = async (schoolId: string, classId: string) => {
     const key = `${schoolId}:${classId}`
     if (rankingKey === key) {
-      setRankingKey('')
+      updateQueryParams(searchParams, setSearchParams, { class: null }, false)
+      return
+    }
+    updateQueryParams(searchParams, setSearchParams, { tab: 'schools', school: schoolId, class: classId }, false)
+  }
+
+  useEffect(() => {
+    if (!rankingKey) {
       setRankingRows([])
       return
     }
-    setBusyRankingKey(key)
+    const [schoolId, classId] = rankingKey.split(':')
+    if (!schoolId || !classId) return
+    let cancelled = false
+    setBusyRankingKey(rankingKey)
     setError('')
-    try {
-      const rows = await api.getLeaderboardByPath({ eventId: event.id, schoolId, classId }, { includePending: true })
-      setRankingKey(key)
-      setRankingRows(rows)
-    } catch (err) {
-      const message = getErrorMessage(err)
-      setError(message)
-      toast(message, 'error')
-    } finally {
-      setBusyRankingKey('')
+    void api.getLeaderboardByPath({ eventId: event.id, schoolId, classId }, { includePending: true })
+      .then((rows) => {
+        if (!cancelled) setRankingRows(rows)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        const message = getErrorMessage(err)
+        setError(message)
+        toast(message, 'error')
+      })
+      .finally(() => {
+        if (!cancelled) setBusyRankingKey('')
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [event.id, rankingKey, toast])
+
+  const pendingRevokeTeacher = useMemo(() => {
+    if (modal !== 'revoke-teacher' || !selectedSchoolId) return null
+    const uid = searchParams.get('teacher')
+    if (!uid) return null
+    const teacher = teachersBySchool[selectedSchoolId]?.find((item) => item.uid === uid)
+    return teacher ? { schoolId: selectedSchoolId, teacher } : null
+  }, [modal, searchParams, selectedSchoolId, teachersBySchool])
 
   return (
     <section className="ops-panel">
@@ -1094,7 +1277,7 @@ function SchoolsPanel({
                           loading={loadingTeachersSchoolId === schoolId}
                           revokingKey={revokingTeacherKey}
                           schoolId={schoolId}
-                          onRevoke={(teacher) => revokeTeacher(schoolId, teacher)}
+                          onRevoke={(teacher) => openRevokeTeacher(schoolId, teacher)}
                         />
                         <ClassList
                           event={event}
@@ -1118,6 +1301,16 @@ function SchoolsPanel({
         </table>
       </div>
       {filteredSchools.length === 0 && <p className="ops-subtle">{t('admin.noSchoolsMatch')}</p>}
+      {pendingRevokeTeacher && (
+        <ConfirmModal
+          busy={revokingTeacherKey === `${pendingRevokeTeacher.schoolId}:${pendingRevokeTeacher.teacher.uid}`}
+          confirmLabel={t('admin.revoke')}
+          message={t('admin.revokeTeacherConfirm', { label: pendingRevokeTeacher.teacher.email || pendingRevokeTeacher.teacher.uid })}
+          title={t('admin.revoke')}
+          onClose={() => closeQueryModal(searchParams, setSearchParams)}
+          onConfirm={() => void revokeTeacher(pendingRevokeTeacher.schoolId, pendingRevokeTeacher.teacher)}
+        />
+      )}
     </section>
   )
 }

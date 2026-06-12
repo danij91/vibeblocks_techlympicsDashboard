@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../../api'
 import type { AdminInviteDoc, Role, RoleDoc } from '../../api/types'
 import { useT } from '../../lib/i18n'
@@ -10,6 +11,42 @@ type MasterTab = 'users' | 'invites'
 type ConsoleTab = 'master' | 'admin'
 type RoleFilter = Role | 'all'
 type RoleWithProfile = RoleDoc & { name?: string; displayName?: string }
+type SearchParamSetter = ReturnType<typeof useSearchParams>[1]
+
+const masterTabs: MasterTab[] = ['users', 'invites']
+const consoleTabs: ConsoleTab[] = ['master', 'admin']
+
+function parseMasterTab(value: string | null): MasterTab {
+  return masterTabs.includes(value as MasterTab) ? (value as MasterTab) : 'users'
+}
+
+function parseConsoleTab(value: string | null): ConsoleTab {
+  return consoleTabs.includes(value as ConsoleTab) ? (value as ConsoleTab) : 'master'
+}
+
+function updateQueryParams(
+  searchParams: URLSearchParams,
+  setSearchParams: SearchParamSetter,
+  patch: Record<string, string | null | undefined>,
+  replace = false,
+) {
+  const next = new URLSearchParams(searchParams)
+  Object.entries(patch).forEach(([key, value]) => {
+    const normalized = value?.trim()
+    if (normalized) next.set(key, normalized)
+    else next.delete(key)
+  })
+  if (next.toString() === searchParams.toString()) return
+  setSearchParams(next, { replace })
+}
+
+function closeQueryModal(searchParams: URLSearchParams, setSearchParams: SearchParamSetter) {
+  if (window.history.length > 1) {
+    window.history.back()
+    return
+  }
+  updateQueryParams(searchParams, setSearchParams, { modal: null, uid: null }, true)
+}
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -34,13 +71,19 @@ function roleSearchText(role: RoleDoc) {
 export default function MasterDashboard() {
   const toast = useToast()
   const t = useT()
-  const [consoleTab, setConsoleTab] = useState<ConsoleTab>('master')
-  const [tab, setTab] = useState<MasterTab>('users')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const paramsKey = searchParams.toString()
+  const consoleTab = parseConsoleTab(searchParams.get('console'))
+  const tab = consoleTab === 'master' ? parseMasterTab(searchParams.get('tab')) : 'users'
+  const modal = searchParams.get('modal')
   const [role, setRole] = useState<RoleDoc | null>(null)
   const [roles, setRoles] = useState<RoleDoc[]>([])
   const [invites, setInvites] = useState<AdminInviteDoc[]>([])
-  const [roleFilter, setRoleFilter] = useState<RoleFilter>('all')
-  const [query, setQuery] = useState('')
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>(() => {
+    const value = searchParams.get('role')
+    return value === 'teacher' || value === 'admin' || value === 'master' ? value : 'all'
+  })
+  const [query, setQuery] = useState(() => searchParams.get('userQuery') ?? '')
   const [invite, setInvite] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -48,6 +91,11 @@ export default function MasterDashboard() {
   const [creatingInvite, setCreatingInvite] = useState(false)
   const [revokingUid, setRevokingUid] = useState('')
   const [deletingInviteCode, setDeletingInviteCode] = useState('')
+  const pendingRole = useMemo(() => {
+    if (modal !== 'revoke-role') return null
+    const uid = searchParams.get('uid')
+    return roles.find((item) => item.uid === uid) ?? null
+  }, [modal, roles, searchParams])
 
   const filteredRoles = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -84,6 +132,40 @@ export default function MasterDashboard() {
   useEffect(() => {
     void refresh()
   }, [])
+
+  useEffect(() => {
+    const value = searchParams.get('role')
+    setRoleFilter(value === 'teacher' || value === 'admin' || value === 'master' ? value : 'all')
+    setQuery(searchParams.get('userQuery') ?? '')
+  }, [paramsKey])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      updateQueryParams(searchParams, setSearchParams, { userQuery: query.trim() || null }, true)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query, paramsKey, setSearchParams])
+
+  const selectConsoleTab = (next: ConsoleTab) => {
+    updateQueryParams(searchParams, setSearchParams, {
+      console: next,
+      tab: next === 'master' ? parseMasterTab(searchParams.get('tab')) : null,
+      school: null,
+      class: null,
+      modal: null,
+      teacher: null,
+      uid: null,
+    }, false)
+  }
+
+  const selectMasterTab = (next: MasterTab) => {
+    updateQueryParams(searchParams, setSearchParams, { console: 'master', tab: next, modal: null, uid: null }, false)
+  }
+
+  const changeRoleFilter = (next: RoleFilter) => {
+    setRoleFilter(next)
+    updateQueryParams(searchParams, setSearchParams, { role: next === 'all' ? null : next }, true)
+  }
 
   const createInvite = async () => {
     setCreatingInvite(true)
@@ -129,9 +211,11 @@ export default function MasterDashboard() {
     }
   }
 
+  const openRevoke = (uid: string) => {
+    updateQueryParams(searchParams, setSearchParams, { console: 'master', modal: 'revoke-role', uid }, false)
+  }
+
   const revoke = async (uid: string) => {
-    const ok = window.confirm(t('master.revokeRoleConfirm'))
-    if (!ok) return
     setRevokingUid(uid)
     setError('')
     try {
@@ -139,6 +223,7 @@ export default function MasterDashboard() {
       setNotice(t('master.roleRevoked'))
       toast(t('master.roleRevoked'), 'success')
       await refresh()
+      closeQueryModal(searchParams, setSearchParams)
     } catch (err) {
       const message = getErrorMessage(err)
       setError(message)
@@ -165,14 +250,14 @@ export default function MasterDashboard() {
         <button
           className={`ops-tab ${consoleTab === 'master' ? 'active' : ''}`}
           aria-current={consoleTab === 'master' ? 'page' : undefined}
-          onClick={() => setConsoleTab('master')}
+          onClick={() => selectConsoleTab('master')}
         >
           {t('master.masterFeatures')}
         </button>
         <button
           className={`ops-tab ${consoleTab === 'admin' ? 'active' : ''}`}
           aria-current={consoleTab === 'admin' ? 'page' : undefined}
-          onClick={() => setConsoleTab('admin')}
+          onClick={() => selectConsoleTab('admin')}
         >
           {t('master.adminConsole')}
         </button>
@@ -200,8 +285,8 @@ export default function MasterDashboard() {
             {role?.role === 'master' ? (
               <div className="ops-panel">
                 <div className="ops-tabs">
-                  <button className={`ops-tab ${tab === 'users' ? 'active' : ''}`} onClick={() => setTab('users')}>{t('master.users')}</button>
-                  <button className={`ops-tab ${tab === 'invites' ? 'active' : ''}`} onClick={() => setTab('invites')}>{t('master.inviteCodes')}</button>
+                  <button className={`ops-tab ${tab === 'users' ? 'active' : ''}`} onClick={() => selectMasterTab('users')}>{t('master.users')}</button>
+                  <button className={`ops-tab ${tab === 'invites' ? 'active' : ''}`} onClick={() => selectMasterTab('invites')}>{t('master.inviteCodes')}</button>
                 </div>
 
                 {tab === 'users' ? (
@@ -211,8 +296,8 @@ export default function MasterDashboard() {
                     roles={filteredRoles}
                     revokingUid={revokingUid}
                     onQuery={setQuery}
-                    onRevoke={revoke}
-                    onRoleFilter={setRoleFilter}
+                    onRevoke={openRevoke}
+                    onRoleFilter={changeRoleFilter}
                   />
                 ) : (
                   <InvitesPanel
@@ -236,6 +321,14 @@ export default function MasterDashboard() {
           </section>
         </div>
       )}
+      {pendingRole && (
+        <RoleRevokeModal
+          busy={revokingUid === pendingRole.uid}
+          role={pendingRole}
+          onClose={() => closeQueryModal(searchParams, setSearchParams)}
+          onConfirm={() => void revoke(pendingRole.uid)}
+        />
+      )}
     </section>
   )
 }
@@ -255,7 +348,7 @@ function UsersTable({
   revokingUid: string
   onRoleFilter: (role: RoleFilter) => void
   onQuery: (query: string) => void
-  onRevoke: (uid: string) => Promise<void>
+  onRevoke: (uid: string) => void
 }) {
   const t = useT()
   return (
@@ -303,6 +396,38 @@ function UsersTable({
       </div>
       {roles.length === 0 && <p className="ops-subtle">{t('master.noUsers')}</p>}
     </section>
+  )
+}
+
+function RoleRevokeModal({
+  role,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  role: RoleDoc
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const t = useT()
+  return (
+    <div className="ops-modal-backdrop" role="presentation" onClick={onClose}>
+      <section aria-modal="true" className="ops-modal" role="dialog" onClick={(event) => event.stopPropagation()}>
+        <div className="ops-topbar">
+          <h2>{t('admin.revoke')}</h2>
+          <button className="ops-button" disabled={busy} onClick={onClose}>{t('common.close')}</button>
+        </div>
+        <p>{t('master.revokeRoleConfirm')}</p>
+        <p className="ops-subtle"><code>{role.email ?? role.uid}</code></p>
+        <div className="ops-row-actions" style={{ marginTop: 12 }}>
+          <button className="ops-button" disabled={busy} onClick={onClose}>{t('common.cancel')}</button>
+          <button className="ops-button danger" disabled={busy} onClick={onConfirm}>
+            {busy ? t('admin.revoking') : t('admin.revoke')}
+          </button>
+        </div>
+      </section>
+    </div>
   )
 }
 
