@@ -18,6 +18,7 @@ import TeacherCodeGate from '../auth/TeacherCodeGate'
 import { useAuthSession } from '../auth/session'
 import '../auth/auth.css'
 import LeaderboardTable from '../ranking/LeaderboardTable'
+import { ShimmerText } from '../../lib/Shimmer'
 import { useToast } from '../../lib/toast'
 
 type ActiveClass = {
@@ -26,6 +27,7 @@ type ActiveClass = {
 }
 type WorkspaceMode = 'participants' | 'ranking'
 type ClassViewMode = 'cards' | 'list'
+type GradeFilter = 'all' | `grade:${number}` | 'other'
 
 function classPath(classInfo: ClassDoc): ClassPath {
   return {
@@ -42,6 +44,24 @@ function participantPath(participant: ParticipantDoc): ParticipantPath {
     classId: participant.classId,
     participantId: participant.id,
   }
+}
+
+function classGrade(className: string): number | 'other' {
+  const match = className.trim().match(/^(\d+)/)
+  if (!match) return 'other'
+  const grade = Number(match[1])
+  return Number.isFinite(grade) && grade > 0 ? grade : 'other'
+}
+
+function gradeValue(classInfo: ClassDoc): GradeFilter {
+  const grade = classGrade(classInfo.name)
+  return grade === 'other' ? 'other' : `grade:${grade}`
+}
+
+function gradeLabel(value: GradeFilter): string {
+  if (value === 'all') return 'All'
+  if (value === 'other') return 'Other'
+  return `Grade ${value.replace('grade:', '')}`
 }
 
 function formatDate(value: string): string {
@@ -253,7 +273,45 @@ function Dashboard({
   onClassChanged: () => Promise<void>
 }) {
   const [classView, setClassView] = useState<ClassViewMode>('cards')
+  const [gradeFilter, setGradeFilter] = useState<GradeFilter>('all')
   const [addClassOpen, setAddClassOpen] = useState(false)
+  const gradeOptions = useMemo(() => {
+    const grades = new Set<number>()
+    let hasOther = false
+    activeSchool.classes.forEach((classInfo) => {
+      const grade = classGrade(classInfo.name)
+      if (grade === 'other') hasOther = true
+      else grades.add(grade)
+    })
+    const options: GradeFilter[] = ['all', ...Array.from(grades).sort((a, b) => a - b).map((grade) => `grade:${grade}` as GradeFilter)]
+    if (hasOther) options.push('other')
+    return options
+  }, [activeSchool.classes])
+  const filteredClasses = useMemo(
+    () => activeSchool.classes.filter((classInfo) => gradeFilter === 'all' || gradeValue(classInfo) === gradeFilter),
+    [activeSchool.classes, gradeFilter],
+  )
+  const selectedClassVisible = activeClass ? filteredClasses.some((classInfo) => classInfo.id === activeClass.classInfo.id) : false
+
+  useEffect(() => {
+    if (!gradeOptions.includes(gradeFilter)) {
+      setGradeFilter('all')
+    }
+  }, [gradeFilter, gradeOptions])
+
+  useEffect(() => {
+    if (filteredClasses.length === 0) return
+    if (filteredClasses.some((classInfo) => classInfo.id === selectedClassId)) return
+    onSelectClass(filteredClasses[0].id)
+  }, [filteredClasses, onSelectClass, selectedClassId])
+
+  const changeGradeFilter = (value: GradeFilter) => {
+    setGradeFilter(value)
+    const nextClasses = activeSchool.classes.filter((classInfo) => value === 'all' || gradeValue(classInfo) === value)
+    if (nextClasses.length > 0 && !nextClasses.some((classInfo) => classInfo.id === selectedClassId)) {
+      onSelectClass(nextClasses[0].id)
+    }
+  }
 
   return (
     <section className="dashboard">
@@ -273,9 +331,32 @@ function Dashboard({
       <div className="class-toolbar">
         <div>
           <h2>{activeSchool.school.name}</h2>
-          <p>{activeSchool.classes.length} classes</p>
+          <p>
+            {filteredClasses.length} of {activeSchool.classes.length} classes
+          </p>
         </div>
         <div className="class-toolbar-actions">
+          {gradeOptions.length > 1 ? (
+            <div className="grade-filter" aria-label="Class grade filter">
+              <div className="segmented compact-segmented grade-filter-tabs" role="group" aria-label="Class grade">
+                {gradeOptions.map((option) => (
+                  <button key={option} type="button" className={gradeFilter === option ? 'active' : ''} onClick={() => changeGradeFilter(option)}>
+                    {gradeLabel(option)}
+                  </button>
+                ))}
+              </div>
+              <label className="grade-filter-select">
+                Grade
+                <select value={gradeFilter} onChange={(event) => changeGradeFilter(event.target.value as GradeFilter)}>
+                  {gradeOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {gradeLabel(option)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
           <div className="segmented compact-segmented" role="group" aria-label="Class view">
             <button type="button" className={classView === 'cards' ? 'active' : ''} onClick={() => setClassView('cards')}>
               Cards
@@ -290,10 +371,10 @@ function Dashboard({
         </div>
       </div>
 
-      {activeSchool.classes.length > 0 ? (
+      {filteredClasses.length > 0 ? (
         classView === 'cards' ? (
           <section className="class-grid" aria-label={`${activeSchool.school.name} classes`}>
-            {activeSchool.classes.map((classInfo) => (
+            {filteredClasses.map((classInfo) => (
               <ClassCard
                 key={classInfo.id}
                 schoolName={activeSchool.school.name}
@@ -311,7 +392,7 @@ function Dashboard({
         ) : (
           <ClassListView
             schoolName={activeSchool.school.name}
-            classes={activeSchool.classes}
+            classes={filteredClasses}
             selectedClassId={selectedClassId}
             onSelectClass={onSelectClass}
             onViewRanking={(classId) => {
@@ -321,9 +402,11 @@ function Dashboard({
             onClassChanged={onClassChanged}
           />
         )
+      ) : activeSchool.classes.length > 0 ? (
+        <div className="panel muted">No classes in this grade.</div>
       ) : null}
 
-      {activeClass ? (
+      {activeClass && selectedClassVisible ? (
         <ClassWorkspace
           activeClass={activeClass}
           mode={workspaceMode}
@@ -524,8 +607,12 @@ function ClassCard({
     <article className={`class-card ${selected ? 'selected' : ''}`}>
       <button className="class-card-select" type="button" onClick={onSelect} aria-pressed={selected}>
         <span>{classInfo.name}</span>
-        <strong>{classInfo.joinCode}</strong>
-        <em>{classInfo.joinActive ? 'Active for new joins' : 'New joins disabled'}</em>
+        <strong>
+          <ShimmerText busy={busyAction !== ''}>{classInfo.joinCode}</ShimmerText>
+        </strong>
+        <em>
+          <ShimmerText busy={busyAction === 'toggle'}>{classInfo.joinActive ? 'Active for new joins' : 'New joins disabled'}</ShimmerText>
+        </em>
       </button>
       <button className="qr-box" type="button" onClick={() => setQrOpen(true)} aria-label={`Open QR code for ${classInfo.name}`}>
         <QRCodeSVG value={url} size={112} marginSize={1} />
@@ -1042,7 +1129,8 @@ label {
   font-size: 14px;
   font-weight: 800;
 }
-input {
+input,
+select {
   border: 1px solid #cbd3e3;
   border-radius: 8px;
   min-height: 42px;
@@ -1105,6 +1193,22 @@ input {
 }
 .compact-segmented button {
   min-width: 72px;
+}
+.grade-filter {
+  display: flex;
+  min-width: 0;
+}
+.grade-filter-tabs {
+  max-width: min(54vw, 520px);
+  overflow-x: auto;
+}
+.grade-filter-tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.grade-filter-select {
+  display: none;
+  min-width: 160px;
 }
 .class-list-layout {
   display: grid;
@@ -1309,7 +1413,8 @@ th {
   font-weight: 700;
 }
 .ranking-table-shell {
-  overflow: hidden;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid #dfe5f1;
   border-radius: 8px;
   background: white;
@@ -1322,11 +1427,16 @@ th {
   background: rgba(15, 23, 42, .42);
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: clamp(12px, 4vw, 24px);
 }
 .dialog-panel,
 .print-dialog {
-  width: min(680px, 92vw);
+  width: min(680px, calc(100vw - 24px));
+}
+.print-dialog {
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .dialog-panel {
   background: white;
@@ -1348,6 +1458,7 @@ th {
 .print-sheet {
   aspect-ratio: 1 / 1.414;
   background: white;
+  box-sizing: border-box;
   color: #111827;
   display: flex;
   flex-direction: column;
@@ -1368,6 +1479,10 @@ th {
 }
 .print-qr {
   margin: 32px 0 16px;
+}
+.print-qr svg {
+  height: auto;
+  max-width: min(280px, 60vw);
 }
 .print-code {
   font-size: 42px;
@@ -1404,6 +1519,61 @@ th {
     align-items: stretch;
     flex-direction: column;
     width: 100%;
+  }
+  .grade-filter,
+  .grade-filter-select {
+    width: 100%;
+  }
+  .grade-filter-tabs {
+    max-width: 100%;
+  }
+}
+@media (max-width: 560px) {
+  .teacher-page {
+    padding: 10px;
+  }
+  .class-grid {
+    grid-template-columns: 1fr;
+  }
+  .class-card,
+  .panel,
+  .workspace {
+    padding: 12px;
+  }
+  .grade-filter-tabs {
+    display: none;
+  }
+  .grade-filter-select {
+    display: grid;
+  }
+  .print-toolbar {
+    margin-bottom: 8px;
+  }
+  .print-sheet {
+    aspect-ratio: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 18px;
+  }
+  .print-sheet h1 {
+    font-size: clamp(20px, 6.5vw, 28px);
+  }
+  .print-sheet h2 {
+    font-size: clamp(18px, 5.8vw, 24px);
+  }
+  .print-qr {
+    margin: 18px 0 12px;
+  }
+  .print-qr svg {
+    max-width: min(220px, 68vw);
+  }
+  .print-code {
+    font-size: clamp(26px, 9vw, 38px);
+    margin-bottom: 12px;
+  }
+  .print-description {
+    font-size: 14px;
+    line-height: 1.45;
   }
 }
 @media print {
